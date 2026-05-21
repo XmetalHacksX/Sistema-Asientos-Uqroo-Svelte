@@ -47,30 +47,32 @@ RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cac
     && chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
 
 # 9. Configuración del servidor Nginx
-RUN echo 'server { \
-    listen 80; \
-    index index.php index.html; \
-    root /var/www/html/public; \
-    location / { try_files $uri $uri/ /index.php?$query_string; } \
-    location ~ \.php$ { \
-        try_files $uri =404; \
-        fastcgi_split_path_info ^(.+\.php)(/.+)$; \
-        fastcgi_pass 127.0.0.1:9000; \
-        fastcgi_index index.php; \
-        include fastcgi_params; \
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name; \
-        fastcgi_param PATH_INFO $fastcgi_path_info; \
-    } \
+RUN printf 'server { \n\
+    listen 80; \n\
+    index index.php index.html; \n\
+    root /var/www/html/public; \n\
+    location / { try_files $uri $uri/ /index.php?$query_string; } \n\
+    location ~ \.php$ { \n\
+        try_files $uri =404; \n\
+        fastcgi_split_path_info ^(.+\.php)(/.+)$; \n\
+        fastcgi_pass 127.0.0.1:9000; \n\
+        fastcgi_index index.php; \n\
+        include fastcgi_params; \n\
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name; \n\
+        fastcgi_param PATH_INFO $fastcgi_path_info; \n\
+    } \n\
 }' > /etc/nginx/http.d/default.conf
 
-# 10. Configuración del administrador de procesos Supervisor
-RUN echo '[supervisord] \n\
-nodaemon=true \n\
-user=root \n\
-[program:nginx] \n\
-command=nginx -g "daemon off;" \n\
-[program:php-fpm] \n\
-command=php-fpm' > /etc/supervisord.conf
+# 10. Configuración del administrador de procesos Supervisor con saltos de línea limpios
+RUN printf '[supervisord]\n\
+nodaemon=true\n\
+user=root\n\
+\n\
+[program:nginx]\n\
+command=nginx -g "daemon off;"\n\
+\n\
+[program:php-fpm]\n\
+command=php-fpm\n' > /etc/supervisord.conf
 
 EXPOSE 80
 
