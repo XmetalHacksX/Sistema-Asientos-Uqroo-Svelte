@@ -76,5 +76,5 @@ command=php-fpm\n' > /etc/supervisord.conf
 
 EXPOSE 80
 
-# 11. Limpia caché, optimiza configuraciones, ejecuta migraciones automáticas en Postgres y arranca los servicios
-CMD php artisan config:cache && php artisan route:cache && php artisan view:cache && php artisan migrate --force && /usr/bin/supervisord -c /etc/supervisord.conf
+# 11. Limpia caché, optimiza, corre migraciones, INYECTA SEEDERS DE PRODUCCIÓN y enciende Supervisor
+CMD php artisan config:cache && php artisan route:cache && php artisan view:cache && php artisan migrate --force && php artisan db:seed --force && /usr/bin/supervisord -c /etc/supervisord.conf
