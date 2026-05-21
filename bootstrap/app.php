@@ -15,8 +15,8 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        // Si el entorno cargado por Render es producción, confiamos en su Proxy Inverso para resolver HTTPS
-        if (config('app.env') === 'production') {
+        // Usamos env() nativo para que no rompa la compilación inicial de paquetes
+        if (env('APP_ENV') === 'production') {
             $middleware->trustProxies(at: '*');
         }
 
