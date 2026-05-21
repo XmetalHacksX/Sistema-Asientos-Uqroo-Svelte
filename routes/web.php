@@ -49,7 +49,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::resource('spaces', SpaceController::class)->except(['show']);
         Route::resource('users', UserController::class)->except(['create', 'store', 'show']);
         Route::resource('roles', RoleController::class)->except(['show']);
-        
+
         // Rutas de administración y validación de boletos
         Route::get('/boletos/escanear', [TicketController::class, 'escanear'])->name('boletos.escanear');
         Route::post('/boletos/validar-token', [TicketController::class, 'validarToken'])->name('boletos.validar-token');
