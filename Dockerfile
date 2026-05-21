@@ -1,6 +1,6 @@
 FROM php:8.3-fpm-alpine
 
-# 1. Instalar dependencias del sistema, extensiones de PHP y NodeJS + NPM
+# 1. Instalar dependencias del sistema, extensiones de PHP y NodeJS + NPM (Soporte Postgres incluido)
 RUN apk add --no-cache \
     nginx \
     supervisor \
@@ -12,11 +12,12 @@ RUN apk add --no-cache \
     git \
     oniguruma-dev \
     mysql-client \
+    postgresql-dev \
     nodejs \
     npm
 
-# 2. Instalar extensiones de PHP indispensables para Laravel
-RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd
+# 2. Instalar extensiones de PHP indispensables para Laravel (Drivers pgsql añadidos)
+RUN docker-php-ext-install pdo_mysql pdo_pgsql pgsql mbstring exif pcntl bcmath gd
 
 # 3. Instalar Composer de forma global
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
@@ -38,8 +39,7 @@ ENV NODE_ENV=production
 # 6. Instalar dependencias de PHP y generar la optimización de clases
 RUN composer install --no-interaction --optimize-autoloader --no-dev
 
-# 7. Instalar dependencias de Node, compilar el frontend (Svelte/Vite) corriendo Wayfinder con éxito
-# 7. Instalar TODAS las dependencias (incluyendo devDependencies de Vite) y compilar
+# 7. Instalar TODAS las dependencias de Node (incluyendo devDependencies de Vite) y compilar el frontend
 RUN npm install --include=dev && npm run build
 
 # 8. Ajustar permisos de almacenamiento y caché para que Laravel pueda escribir sin problemas
@@ -76,6 +76,5 @@ command=php-fpm\n' > /etc/supervisord.conf
 
 EXPOSE 80
 
-# 11. Cachear configuraciones de Laravel para máxima velocidad y arrancar el servidor
-# 11. Limpia caché, optimiza, CORRE MIGRACIONES AUTOMÁTICAS y enciende Supervisor
+# 11. Limpia caché, optimiza configuraciones, ejecuta migraciones automáticas en Postgres y arranca los servicios
 CMD php artisan config:cache && php artisan route:cache && php artisan view:cache && php artisan migrate --force && /usr/bin/supervisord -c /etc/supervisord.conf
