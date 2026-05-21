@@ -4,6 +4,15 @@
     COPY package*.json ./
     RUN npm ci
     COPY . .
+    
+    # Variables de entorno requeridas por Vite para compilar el build de producción
+    ENV VITE_APP_NAME="Laravel"
+    ENV VITE_STRIPE_KEY="pk_test_51TWNJrD2FmSxlbdnZ45Lr7vYBhPE2tqSqdDUvceDJdil6LqcDAEEfWyHcrEBsCPX90zTB0Ox3Y84NrvNtH1gpKoA00vOicjsyJ"
+    ENV VITE_REVERB_APP_KEY="g0x8fwadh8e3hxducuby"
+    ENV VITE_REVERB_HOST="sistema-asientos-uqroo-svelte.onrender.com"
+    ENV VITE_REVERB_PORT="443"
+    ENV VITE_REVERB_SCHEME="https"
+    
     RUN npm run build
     
     # --- Etapa 2: Servidor de Producción (PHP + Nginx) ---
