@@ -21,6 +21,7 @@
         id: number;
         name: string;
         building_id: number;
+        is_template?: boolean;
     };
 
     let { space, buildings }: { space: Space; buildings: Building[] } =
@@ -29,12 +30,14 @@
     let data = $state({
         building_id: space.building_id as string | number,
         name: space.name,
+        is_template: !!space.is_template,
     });
 
     function submit() {
         router.put(`/admin/spaces/${space.id}`, {
             building_id: Number(data.building_id),
             name: data.name,
+            is_template: data.is_template,
         });
     }
 </script>
@@ -48,7 +51,7 @@
                 Editar Sala / Teatro
             </h1>
             <p class="text-sm text-muted-foreground">
-                Actualiza el nombre y el edificio asignado a esta sala.
+                Actualiza el nombre, el edificio asignado y el estado de plantilla de esta sala.
             </p>
         </div>
         <Link
@@ -96,11 +99,25 @@
             />
         </div>
 
+        <div class="flex items-center gap-2 py-2">
+            <input
+                id="is_template"
+                type="checkbox"
+                class="h-4 w-4 rounded border-sidebar-border text-primary focus:ring-primary bg-background"
+                bind:checked={data.is_template}
+            />
+            <label
+                for="is_template"
+                class="text-sm font-medium text-foreground cursor-pointer select-none"
+                >Marcar esta sala como Plantilla reutilizable</label
+            >
+        </div>
+
         <div class="flex gap-2">
             <button
                 type="submit"
                 class="inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-                disabled={data.building_id === ''}
+                disabled={data.building_id === '' || data.name.trim() === ''}
             >
                 Guardar Cambios
             </button>

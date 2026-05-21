@@ -2,25 +2,109 @@
     export const layout = null;
 </script>
 
-<script>
-    import { router } from '@inertiajs/svelte';
-    import Panzoom from '@panzoom/panzoom';
+<script lang="ts">
+    import { router, page, Link } from '@inertiajs/svelte';
+    import { onMount } from 'svelte';
+    import { fade, slide } from 'svelte/transition';
+    import AppHead from '@/components/AppHead.svelte';
+    import {
+        School,
+        ArrowLeft,
+        CheckCircle,
+        Info,
+        Sparkles,
+        CreditCard,
+        Clock,
+        Lock,
+        ShieldAlert,
+        Award,
+    } from 'lucide-svelte';
 
-    let { space, event } = $props();
+    // Subcomponentes modulares refactorizados
+    import EventInfoCard from './components/EventInfoCard.svelte';
+    import SeatingChart from './components/SeatingChart.svelte';
+    import PaymentForm from './components/PaymentForm.svelte';
+    import SuccessTicket from './components/SuccessTicket.svelte';
 
-    // Array para guardar los IDs de los asientos seleccionados
-    let selectedSeatId = $state(null);
+    interface SeatProps {
+        id: number;
+        identifier: string;
+        pos_x: number;
+        pos_y: number;
+        status: string;
+    }
+
+    interface SpaceProps {
+        name: string;
+        layout_objects?: any[];
+    }
+
+    interface EventProps {
+        id: number;
+        name: string;
+        description?: string;
+        poster_url?: string;
+        start_time: string;
+        end_time: string;
+    }
+
+    let { space, event, seats, stripeKey, ticketPrice } = $props<{
+        space: SpaceProps;
+        event: EventProps;
+        seats: SeatProps[];
+        stripeKey: string;
+        ticketPrice: number;
+    }>();
+
+    // Svelte 5 local reactive state for real-time WebSockets synchronization
+    let localSeats = $state<SeatProps[]>([]);
+    $effect(() => {
+        localSeats = seats;
+    });
+
+    // Estado reactivo de selección de asiento
+    let selectedSeatId = $state<number | null>(null);
     let selectedSeatName = $state('');
 
-    // --- INGENIERÍA: CÁLCULO DE FILAS (A, B, C...) ---
-    const seatW = 32;
-    const seatH = 32;
-    const paddingLeftForLabels = 40; // Espacio para letras A, B, C a la izquierda
+    // Estado reactivo de contacto para invitados
+    let guestName = $state('');
+    let guestEmail = $state('');
+    let guestPhone = $state('');
 
-    // --- INGENIERÍA: Funciones para evitar el desfase de zona horaria (UTC-5) ---
-    function formatLocalDate(dateStr) {
+    // Reservas temporales (Hold timer)
+    let currentReservationId = $state<number | null>(null);
+    let expiresAt = $state<string | null>(null);
+    let timeLeft = $state(0);
+    let timerInterval: any = null;
+
+    // Estados de Stripe / Procesamiento de Pago
+    let stripeInstance = $state<any>(null);
+    let cardElement = $state<any>(null);
+    let showPaymentForm = $state(false);
+    let paymentProcessing = $state(false);
+    let paymentError = $state<string | null>(null);
+    let paymentSuccess = $state(false);
+    let confirmedSeatName = $state('');
+    let confirmedPaymentId = $state<number | null>(null);
+    let confirmedTicketToken = $state<string | null>(null);
+    let cardMounted = false;
+
+    // Estados para Toast Notification
+    let showToast = $state(false);
+    let toastMessage = $state('');
+
+    const auth: any = $derived(page.props.auth);
+
+    // Derivados reactivos para el temporizador (Svelte 5)
+    const minutesLeft = $derived(Math.floor(timeLeft / 60));
+    const secondsLeft = $derived(timeLeft % 60);
+    const formattedTime = $derived(
+        `${minutesLeft}:${secondsLeft < 10 ? '0' : ''}${secondsLeft}`,
+    );
+
+    // Ingeniería: Formateadores locales (UTC-5)
+    function formatLocalDate(dateStr: string) {
         if (!dateStr) return 'Por definir';
-        // Quitamos la Z final para que JS no reste las horas automáticamente
         const cleanStr = String(dateStr)
             .replace('Z', '')
             .replace('.000000', '');
@@ -31,9 +115,8 @@
         });
     }
 
-    function formatLocalTime(dateStr) {
+    function formatLocalTime(dateStr: string) {
         if (!dateStr) return '--:--';
-        // Quitamos la Z final para forzar la hora exacta de la base de datos
         const cleanStr = String(dateStr)
             .replace('Z', '')
             .replace('.000000', '');
@@ -43,36 +126,31 @@
         });
     }
 
-    // Leemos directo del evento usando nuestras funciones corregidas
     let fechaEvento = $derived(formatLocalDate(event?.start_time));
     let horaInicio = $derived(formatLocalTime(event?.start_time));
     let horaFin = $derived(formatLocalTime(event?.end_time));
 
-    // Calculamos las letras de fila únicas y su posición Y centrada
     const distinctRowLetters = $derived.by(() => {
-        if (!space?.nodes) return [];
-        // Obtenemos la primera letra del identifier (asumiendo patrón A-1)
+        if (!localSeats) return [];
         const letters = [
-            ...new Set(space.nodes.map((n) => n.identifier.charAt(0))),
-        ].sort((a, b) => a.localeCompare(b)); // Ordenamos A, B, C... downwards
+            ...new Set(localSeats.map((n) => n.identifier.charAt(0))),
+        ].sort((a, b) => a.localeCompare(b));
 
-        // Para cada letra, encontramos el pos_y mínimo (el inicio de la fila)
         return letters.map((letter) => {
-            const rowNodes = space.nodes.filter((n) =>
+            const rowNodes = localSeats.filter((n) =>
                 n.identifier.startsWith(letter),
             );
             const minY = Math.min(...rowNodes.map((n) => n.pos_y));
-            return { letter, y: minY + seatH / 2 + 3 }; // Posición Y centrada para el texto
+            return { letter, y: minY + 19 }; // 32/2 + 3 = 19
         });
     });
 
-    // Panzoom
-    let panzoomInstance = null;
-    let panzoomNode = null;
+    const seatW = 32;
+    const seatH = 32;
+    const paddingLeftForLabels = 40;
 
-    // --- INGENIERÍA: CÁLCULO DE LÍMITES ROBUSTO (Incluye Escenarios y Etiquetas) ---
-    function getSeatingBounds() {
-        const list = space?.nodes;
+    let seatingBounds = $derived.by(() => {
+        const list = localSeats;
         if (!list?.length) return null;
 
         let minX = Infinity,
@@ -80,7 +158,6 @@
             maxX = -Infinity,
             maxY = -Infinity;
 
-        // Asientos
         for (const n of list) {
             minX = Math.min(minX, n.pos_x);
             minY = Math.min(minY, n.pos_y);
@@ -88,7 +165,6 @@
             maxY = Math.max(maxY, n.pos_y + seatH);
         }
 
-        // Objetos (Escenarios)
         if (space.layout_objects) {
             for (const obj of space.layout_objects) {
                 minX = Math.min(minX, obj.properties.pos_x);
@@ -104,402 +180,528 @@
             }
         }
 
-        // Ajustes para Row Labels (Ya quitamos el espacio extra de arriba porque quitamos el SCREEN indicator)
-        minX -= paddingLeftForLabels; // Espacio para etiquetas a la izquierda
-        minY -= 20; // Un poco de margen superior nada más
+        minX -= paddingLeftForLabels;
+        minY -= 20;
 
-        if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) return null;
         return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+    });
+
+    // --- COOKIES & ACCIONES API ---
+    function getCookie(name: string) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2)
+            return decodeURIComponent(parts.pop().split(';').shift() || '');
+        return '';
     }
 
-    function centerAndFit() {
-        if (!panzoomInstance || !panzoomNode) return;
+    async function apartarSeat(seatId: number) {
+        const response = await fetch('/espacios/reservar/apartar', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-XSRF-TOKEN': getCookie('XSRF-TOKEN'),
+                Accept: 'application/json',
+            },
+            body: JSON.stringify({ seat_id: seatId, event_id: event.id }),
+        });
 
-        const bbox = getSeatingBounds();
-        if (!bbox || bbox.width <= 0 || bbox.height <= 0) return;
-
-        const parent = panzoomNode.parentElement;
-        if (!parent) return;
-
-        const containerW = parent.clientWidth || 1;
-        const containerH = parent.clientHeight || 1;
-
-        const padding = 0.85; // Factor de ajuste
-        const scaleX = (containerW / bbox.width) * padding;
-        const scaleY = (containerH / bbox.height) * padding;
-        const initialScale = Math.min(scaleX, scaleY);
-
-        // Centrado dinámico
-        const x =
-            containerW / 2 -
-            (bbox.width * initialScale) / 2 -
-            bbox.x * initialScale;
-        const y =
-            containerH / 2 -
-            (bbox.height * initialScale) / 2 -
-            bbox.y * initialScale;
-
-        panzoomInstance.zoom(initialScale, { animate: false });
-        panzoomInstance.pan(x, y, { animate: false });
+        if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.message || 'Error al apartar');
+        }
+        return await response.json();
     }
 
-    // setupPanZoom (Respetando tu lógica original)
-    function setupPanZoom(node, initialKey) {
-        let wheelTarget = null;
-        function teardown() {
-            if (panzoomInstance) {
-                wheelTarget?.removeEventListener(
-                    'wheel',
-                    panzoomInstance.zoomWithWheel,
+    async function releaseHold(reservationId: number) {
+        try {
+            await fetch('/espacios/reservar/liberar', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-XSRF-TOKEN': getCookie('XSRF-TOKEN'),
+                    Accept: 'application/json',
+                },
+                body: JSON.stringify({ reservation_id: reservationId }),
+                keepalive: true,
+            });
+        } catch (err) {
+            console.error('Error al liberar hold:', err);
+        }
+    }
+
+    function startTimer(expireTimeStr: string) {
+        if (timerInterval) clearInterval(timerInterval);
+        const expireTime = new Date(expireTimeStr).getTime();
+
+        const updateTimer = () => {
+            const now = new Date().getTime();
+            const diff = expireTime - now;
+
+            if (diff <= 0) {
+                timeLeft = 0;
+                clearInterval(timerInterval);
+                alert(
+                    'Tu tiempo de apartado ha expirado y el asiento ha sido liberado.',
                 );
-                panzoomInstance.destroy();
-                panzoomInstance = null;
-                panzoomNode = null;
+                resetSelection();
+                router.reload({ only: ['seats'] });
+            } else {
+                timeLeft = Math.ceil(diff / 1000);
             }
-            wheelTarget = null;
+        };
+
+        updateTimer();
+        timerInterval = setInterval(updateTimer, 1000);
+    }
+
+    // Trigger Toast Notification on success
+    function triggerSuccessToast(seatName: string) {
+        toastMessage = `¡Pago de $${ticketPrice}.00 MXN confirmado exitosamente! Tu asiento "${seatName}" ha sido reservado.`;
+        showToast = true;
+        setTimeout(() => {
+            showToast = false;
+        }, 6000);
+    }
+
+    function stopTimer() {
+        if (timerInterval) {
+            clearInterval(timerInterval);
+            timerInterval = null;
         }
-        function ensure() {
-            if (panzoomInstance) return;
-            panzoomNode = node;
-            panzoomInstance = Panzoom(node, { maxScale: 5, minScale: 0.05 });
-            wheelTarget = node.parentElement;
-            wheelTarget?.addEventListener(
-                'wheel',
-                panzoomInstance.zoomWithWheel,
-            );
+        timeLeft = 0;
+    }
+
+    function resetSelection() {
+        selectedSeatId = null;
+        selectedSeatName = '';
+        currentReservationId = null;
+        expiresAt = null;
+        stopTimer();
+    }
+
+    async function handleSeatSelection(seat: SeatProps) {
+        if (seat.status !== 'disponible' && selectedSeatId !== seat.id) return;
+
+        // Liberar si vuelve a hacer click en el mismo
+        if (selectedSeatId === seat.id) {
+            const oldReservationId = currentReservationId;
+            resetSelection();
+            if (oldReservationId) await releaseHold(oldReservationId);
+            router.reload({ only: ['seats'] });
+            return;
         }
-        function apply(key) {
-            const count = Number(String(key).split('|')[1] ?? '0');
-            if (count < 1) {
-                teardown();
+
+        // Si ya tenía otro asiento seleccionado, liberarlo primero
+        if (currentReservationId) {
+            const oldReservationId = currentReservationId;
+            resetSelection();
+            await releaseHold(oldReservationId);
+            router.reload({ only: ['seats'] });
+        }
+
+        // Intentar apartar
+        try {
+            const res = await apartarSeat(seat.id);
+            if (res.success) {
+                selectedSeatId = seat.id;
+                selectedSeatName = seat.identifier;
+                currentReservationId = res.reservation_id;
+                expiresAt = res.expires_at;
+                startTimer(res.expires_at);
+                router.reload({ only: ['seats'] });
+            }
+        } catch (err: any) {
+            alert(err.message || 'El asiento ya no está disponible.');
+            router.reload({ only: ['seats'] });
+        }
+    }
+
+    // Stripe checkout mount
+    function initializeStripeForm() {
+        if (!currentReservationId) return;
+
+        if (!auth.user) {
+            if (!guestName.trim() || !guestEmail.trim() || !guestPhone.trim()) {
+                alert('Por favor, completa todos tus datos de contacto.');
                 return;
             }
-            ensure();
-            requestAnimationFrame(() => centerAndFit());
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(guestEmail.trim())) {
+                alert('Por favor, ingresa un correo electrónico válido.');
+                return;
+            }
         }
-        apply(initialKey);
-        return { update: apply, destroy: teardown };
+
+        showPaymentForm = true;
+        paymentError = null;
+
+        setTimeout(() => {
+            // @ts-ignore
+            if (!stripeInstance || cardMounted || !window.Stripe) return;
+            const elements = stripeInstance.elements();
+            cardElement = elements.create('card', {
+                style: {
+                    base: {
+                        fontFamily: '"Inter", system-ui, sans-serif',
+                        fontSize: '15px',
+                        color: '#1e293b',
+                        '::placeholder': { color: '#94a3b8' },
+                    },
+                    invalid: { color: '#ef4444' },
+                },
+                hidePostalCode: true,
+            });
+            cardElement.mount('#stripe-card-element');
+            cardMounted = true;
+        }, 80);
     }
 
-    // Funciones públicas
-    function selectSeat(seat) {
-        if (seat.is_occupied || seat.status !== 'active') return;
-        selectedSeatId = selectedSeatId === seat.id ? null : seat.id;
-        selectedSeatName = selectedSeatId ? seat.identifier : '';
+    async function handlePaymentProcessing() {
+        if (!stripeInstance || !cardElement || !currentReservationId) return;
+
+        paymentProcessing = true;
+        paymentError = null;
+
+        try {
+            const { paymentMethod, error: pmError } =
+                await stripeInstance.createPaymentMethod({
+                    type: 'card',
+                    card: cardElement,
+                });
+
+            if (pmError) {
+                paymentError = pmError.message || 'Error de tarjeta.';
+                paymentProcessing = false;
+                return;
+            }
+
+            const csrf = getCookie('XSRF-TOKEN');
+            const payload: any = {
+                reservation_id: currentReservationId,
+                payment_method_id: paymentMethod.id,
+            };
+            if (!auth.user) {
+                payload.guest_name = guestName.trim();
+                payload.guest_email = guestEmail.trim();
+                payload.guest_phone = guestPhone.trim();
+            }
+
+            const response = await fetch('/espacios/reservar/pagar', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-XSRF-TOKEN': csrf,
+                    Accept: 'application/json',
+                },
+                body: JSON.stringify(payload),
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                paymentError = data.message || 'Error al procesar el pago.';
+                paymentProcessing = false;
+                return;
+            }
+
+            // Éxito de compra
+            stopTimer();
+            confirmedSeatName = selectedSeatName;
+            confirmedPaymentId = data.payment_id;
+            confirmedTicketToken = data.ticket_token;
+            paymentSuccess = true;
+            showPaymentForm = false;
+            currentReservationId = null;
+            selectedSeatId = null;
+            selectedSeatName = '';
+            cardMounted = false;
+
+            // Disparar Toast de éxito animado
+            triggerSuccessToast(confirmedSeatName);
+
+            router.reload({ only: ['seats'] });
+        } catch (err) {
+            paymentError =
+                'Ocurrió un error inesperado. Por favor intenta de nuevo.';
+        } finally {
+            paymentProcessing = false;
+        }
     }
 
-    function confirmarReserva() {
-        if (!selectedSeatId) return;
-        // Ahora usamos la ruta dinámica para guardar
-        router.post('/espacios/reservar', {
-            node_id: selectedSeatId,
-            event_id: event.id,
-        });
-    }
+    onMount(() => {
+        // Cargar Stripe.js desde CDN oficial
+        const script = document.createElement('script');
+        script.src = 'https://js.stripe.com/v3/';
+        script.onload = () => {
+            // @ts-ignore
+            stripeInstance = window.Stripe(stripeKey);
+        };
+        document.head.appendChild(script);
 
-    // Reactive bound reference (Svelte 5)
-    let seatingBounds = $state(null);
-    $effect(() => {
-        // Recalculate bounds whenever space changes
-        if (space) seatingBounds = getSeatingBounds();
+        // Echo Channel Subscription to sync seats status in real-time
+        if (window.Echo) {
+            window.Echo.channel(`event.${event.id}`).listen(
+                '.seat.updated',
+                (e: { seatIdentifier: string; status: string }) => {
+                    localSeats = localSeats.map((s) =>
+                        s.identifier === e.seatIdentifier
+                            ? { ...s, status: e.status }
+                            : s,
+                    );
+                },
+            );
+        }
+
+        const handleBeforeUnload = () => {
+            if (currentReservationId) {
+                const csrf = getCookie('XSRF-TOKEN');
+                fetch('/espacios/reservar/liberar', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-XSRF-TOKEN': csrf,
+                    },
+                    body: JSON.stringify({
+                        reservation_id: currentReservationId,
+                    }),
+                    keepalive: true,
+                });
+            }
+        };
+
+        window.addEventListener('beforeunload', handleBeforeUnload);
+
+        return () => {
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+            if (currentReservationId) releaseHold(currentReservationId);
+            if (window.Echo) {
+                window.Echo.leaveChannel(`event.${event.id}`);
+            }
+            stopTimer();
+        };
     });
 </script>
 
+<AppHead title={`Reservar Boletos - ${event?.name || 'Evento'}`} />
+
+<!-- Floating Toast Success Notification -->
+{#if showToast}
+    <div
+        class="fixed right-6 top-24 z-[100] flex max-w-md items-center gap-3.5 rounded-2xl border border-emerald-100 bg-white p-4 shadow-2xl dark:border-emerald-950/40 dark:bg-[#0d1310]"
+        transition:fade={{ duration: 250 }}
+    >
+        <div
+            class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-950/50"
+        >
+            <CheckCircle class="h-5 w-5 text-[#005E35] dark:text-emerald-400" />
+        </div>
+        <div class="flex-1">
+            <h4 class="text-sm font-black text-[#005E35] dark:text-emerald-400">
+                ¡Compra Confirmada!
+            </h4>
+            <p
+                class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-snug"
+            >
+                {toastMessage}
+            </p>
+        </div>
+    </div>
+{/if}
+
 <div
-    class="public-view-wrapper"
-    style="font-family: system-ui, sans-serif; background-color: white; color: black; min-height: 100vh; padding: 2rem;"
+    class="min-h-screen bg-slate-50 font-sans text-slate-900 transition-colors duration-300 dark:bg-[#070b09] dark:text-[#EDEDEC]"
 >
-    <div
-        class="event-card"
-        style="background: white; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 2rem; display: flex; gap: 2rem; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 2rem;"
+    <!-- Header Universitario Premium -->
+    <header
+        class="sticky top-0 z-50 flex items-center justify-between border-b border-slate-100 bg-white/80 px-6 py-4 shadow-sm backdrop-blur-md dark:border-emerald-950/60 dark:bg-[#0d1611]/90"
     >
-        <div
-            style="width: 150px; height: 220px; background: #cbd5e1; border-radius: 0.75rem; display: flex; align-items: center; justify-content: center; color: #64748b; font-weight: bold; border: 1px solid #e2e8f0; overflow: hidden; background-size: cover; background-position: center; background-image: url('{event?.poster_url ||
-                ''}');"
-        >
-            {#if !event?.poster_url}
-                POSTER
-            {/if}
-        </div>
-
-        <div
-            style="flex: 1; display: flex; flex-direction: column; justify-content: center;"
-        >
-            <h1
-                style="margin: 0 0 0.5rem; font-size: 2.2rem; font-weight: 800; color: #0f172a;"
-            >
-                {event?.name || 'Evento sin nombre'}
-            </h1>
-
-            {#if event?.description}
-                <p
-                    style="margin: 0 0 2rem; font-size: 15px; color: #475569; max-width: 800px; line-height: 1.5;"
-                >
-                    {event.description}
-                </p>
-            {:else}
-                <div style="margin-bottom: 2rem;"></div>
-            {/if}
-
+        <div class="flex items-center gap-3">
             <div
-                style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem;"
+                class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#005E35] to-[#004024] text-white shadow-md border border-[#D49A15]/30"
             >
-                <div style="display: flex; gap: 0.75rem; align-items: center;">
-                    <div
-                        style="width: 40px; height: 40px; background: #e0f2fe; border-radius: 0.5rem; display: flex; align-items: center; justify-content: center; color: #0369a1; font-size: 1.2rem;"
-                    >
-                        📅
-                    </div>
-                    <div>
-                        <div
-                            style="font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase;"
-                        >
-                            FECHA
-                        </div>
-                        <div
-                            style="font-size: 15px; font-weight: bold; color: #0f172a; text-transform: capitalize;"
-                        >
-                            {fechaEvento}
-                        </div>
-                    </div>
-                </div>
-
-                <div style="display: flex; gap: 0.75rem; align-items: center;">
-                    <div
-                        style="width: 40px; height: 40px; background: #f0fdf4; border-radius: 0.5rem; display: flex; align-items: center; justify-content: center; color: #166534; font-size: 1.2rem;"
-                    >
-                        🕒
-                    </div>
-                    <div>
-                        <div
-                            style="font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase;"
-                        >
-                            INICIO
-                        </div>
-                        <div
-                            style="font-size: 15px; font-weight: bold; color: #0f172a;"
-                        >
-                            {horaInicio}
-                        </div>
-                    </div>
-                </div>
-
-                <div style="display: flex; gap: 0.75rem; align-items: center;">
-                    <div
-                        style="width: 40px; height: 40px; background: #faf5ff; border-radius: 0.5rem; display: flex; align-items: center; justify-content: center; color: #6b21a8; font-size: 1.2rem;"
-                    >
-                        🏁
-                    </div>
-                    <div>
-                        <div
-                            style="font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase;"
-                        >
-                            FIN
-                        </div>
-                        <div
-                            style="font-size: 15px; font-weight: bold; color: #0f172a;"
-                        >
-                            {horaFin}
-                        </div>
-                    </div>
-                </div>
-
-                <div style="display: flex; gap: 0.75rem; align-items: center;">
-                    <div
-                        style="width: 40px; height: 40px; background: #fef2f2; border-radius: 0.5rem; display: flex; align-items: center; justify-content: center; color: #991b1b; font-size: 1.2rem;"
-                    >
-                        🏢
-                    </div>
-                    <div>
-                        <div
-                            style="font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase;"
-                        >
-                            SALA
-                        </div>
-                        <div
-                            style="font-size: 15px; font-weight: bold; color: #0f172a;"
-                        >
-                            {space?.name || 'No asignada'}
-                        </div>
-                    </div>
-                </div>
+                <School class="h-5 w-5 text-amber-400" />
+            </div>
+            <div class="flex flex-col leading-none">
+                <span
+                    class="text-lg font-black tracking-tight text-[#005E35] dark:text-emerald-400"
+                    >Sistema de Reservas</span
+                >
+                <span
+                    class="text-[10px] font-bold uppercase tracking-widest text-[#D49A15] dark:text-amber-400"
+                    >Cultura UQROO</span
+                >
             </div>
         </div>
-    </div>
 
-    <div
-        style="background: white; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 2rem; box-shadow: 0 4px 6px rgba(0,0,0,0.05);"
-    >
-        <h2
-            style="margin: 0 0 2rem; font-size: 1.8rem; font-weight: 700; color: #0f172a;"
+        <Link
+            href="/"
+            class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 transition-all hover:bg-slate-50 hover:text-slate-900 dark:border-emerald-950/60 dark:bg-[#0f1c15] dark:text-emerald-300 dark:hover:bg-emerald-900/30"
         >
-            Selecciona tus Asientos
-        </h2>
+            <ArrowLeft class="h-3.5 w-3.5" />
+            Regresar a Cartelera
+        </Link>
+    </header>
 
+    <main class="mx-auto max-w-7xl px-6 py-8">
+        <!-- Event Details Header Card -->
+        <EventInfoCard {event} {space} {fechaEvento} {horaInicio} {horaFin} />
+
+        <!-- Layout of Seating Grid and Checkout Panel -->
         <div
-            style="width: 100%; height: 75vh; background-color: white; border-radius: 1rem; overflow: hidden; touch-action: none; border: 1px solid #e2e8f0;"
+            class="overflow-hidden rounded-3xl border border-slate-100 bg-white p-6 shadow-sm dark:border-emerald-950/40 dark:bg-[#0d1310] sm:p-8"
         >
-            <svg width="100%" height="100%" style="display: block;">
-                <g
-                    use:setupPanZoom={`${space?.id ?? 0}|${space?.nodes?.length ?? 0}`}
+            <div
+                class="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-center"
+            >
+                <div>
+                    <h2
+                        class="text-xl font-black tracking-tight text-slate-900 dark:text-white sm:text-2xl"
+                    >
+                        Selecciona tu Asiento
+                    </h2>
+                    <p
+                        class="mt-0.5 text-xs text-slate-500 dark:text-slate-400"
+                    >
+                        Haz clic en un asiento disponible para iniciar el
+                        apartado temporal.
+                    </p>
+                </div>
+
+                <!-- Seating Legend -->
+                <div
+                    class="flex flex-wrap gap-4 text-xs font-bold text-slate-600 dark:text-slate-400"
                 >
-                    <rect
-                        x="-5000"
-                        y="-5000"
-                        width="10000"
-                        height="10000"
-                        fill="transparent"
-                        pointer-events="all"
-                    />
+                    <span class="flex items-center gap-1.5">
+                        <div
+                            class="h-3.5 w-3.5 rounded bg-[#005E35] border border-[#005E35]/30"
+                        ></div>
+                        Disponible
+                    </span>
+                    <span class="flex items-center gap-1.5">
+                        <div
+                            class="h-3.5 w-3.5 rounded bg-[#cbd5e1] border border-slate-300/40 dark:bg-emerald-950/55 dark:border-emerald-900/40"
+                        ></div>
+                        Ocupado
+                    </span>
+                    <span class="flex items-center gap-1.5">
+                        <div
+                            class="h-3.5 w-3.5 rounded bg-[#D49A15] border border-amber-500/20"
+                        ></div>
+                        Tu Selección
+                    </span>
+                </div>
+            </div>
 
-                    {#if space && space.layout_objects}
-                        {#each space.layout_objects as obj}
-                            <g>
-                                <rect
-                                    x={obj.properties.pos_x}
-                                    y={obj.properties.pos_y}
-                                    width={obj.properties.width}
-                                    height={obj.properties.height}
-                                    fill={obj.properties.color}
-                                    rx="8"
-                                    opacity="0.6"
-                                />
-                                <text
-                                    x={obj.properties.pos_x +
-                                        obj.properties.width / 2}
-                                    y={obj.properties.pos_y +
-                                        obj.properties.height / 2 +
-                                        5}
-                                    text-anchor="middle"
-                                    fill="white"
-                                    style="font-family: system-ui, sans-serif; font-size: 14px; font-weight: 800; pointer-events: none; text-transform: uppercase; letter-spacing: 0.1em;"
-                                >
-                                    {obj.properties.label}
-                                </text>
-                            </g>
-                        {/each}
-                    {/if}
+            <!-- Seating grid chart -->
+            <SeatingChart
+                seats={localSeats}
+                {space}
+                {event}
+                {selectedSeatId}
+                {seatingBounds}
+                {distinctRowLetters}
+                onselect={handleSeatSelection}
+            />
 
-                    {#each distinctRowLetters as row}
-                        <text
-                            x={seatingBounds ? seatingBounds.x + 20 : 0}
-                            y={row.y}
-                            text-anchor="middle"
-                            fill="#64748b"
-                            style="font-family: system-ui, sans-serif; font-size: 14px; font-weight: 800; pointer-events: none;"
+            <!-- Panel block for checkout -->
+            <div
+                class="mt-6 flex flex-col items-stretch justify-end gap-6 md:flex-row md:items-start"
+            >
+                <div
+                    class="flex-1 rounded-2xl bg-slate-50 p-5 dark:bg-[#121b16] border border-slate-100 dark:border-emerald-950/20"
+                >
+                    <h3
+                        class="text-xs font-black uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2"
+                    >
+                        Instrucciones de Compra
+                    </h3>
+                    <ul
+                        class="space-y-2 text-xs text-slate-500 dark:text-slate-400 leading-relaxed list-disc list-inside"
+                    >
+                        <li>
+                            Los asientos en color <strong
+                                class="text-[#005E35] dark:text-emerald-400"
+                                >Verde</strong
+                            > están disponibles para compra.
+                        </li>
+                        <li>
+                            Al seleccionar un asiento se te otorgan <strong
+                                class="text-[#D49A15]">10 minutos</strong
+                            > para concretar la transacción segura antes de liberarlo.
+                        </li>
+                        <li>
+                            El boleto digital contiene un código QR dinámico de
+                            alta seguridad.
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="w-full max-w-md flex-shrink-0">
+                    <!-- Pago exitoso (Boleto) -->
+                    {#if paymentSuccess}
+                        <SuccessTicket
+                            {event}
+                            {confirmedSeatName}
+                            {ticketPrice}
+                            confirmedPaymentId={confirmedPaymentId || 0}
+                            confirmedTicketToken={confirmedTicketToken || ''}
+                        />
+
+                        <!-- Asiento seleccionado, mostrar temporizador y checkout -->
+                    {:else if selectedSeatId}
+                        <div
+                            class="mb-4 flex items-center justify-between rounded-2xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 dark:border-amber-950/20 dark:bg-amber-950/10"
+                            transition:slide
                         >
-                            {row.letter}
-                        </text>
-                    {/each}
-
-                    {#if space && space.nodes}
-                        {#each space.nodes as seat}
-                            <g
-                                onclick={() => selectSeat(seat)}
-                                style="cursor: {seat.is_occupied ||
-                                seat.status !== 'active'
-                                    ? 'not-allowed'
-                                    : 'pointer'}; pointer-events: all;"
+                            <span
+                                class="text-xs font-bold text-amber-800 dark:text-amber-400 flex items-center gap-1.5"
                             >
-                                <rect
-                                    x={seat.pos_x}
-                                    y={seat.pos_y}
-                                    width="32"
-                                    height="32"
-                                    rx="7"
-                                    fill={seat.is_occupied ||
-                                    seat.status !== 'active'
-                                        ? '#ef4444' // Ocupado o Bloqueado
-                                        : selectedSeatId === seat.id
-                                          ? '#3b82f6' // Selección del usuario
-                                          : '#10b981'}
-                                    // Libre
-                                    stroke={selectedSeatId === seat.id
-                                        ? 'white'
-                                        : 'none'}
-                                    stroke-width="2"
-                                    style="transition: fill 0.2s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: {selectedSeatId ===
-                                    seat.id
-                                        ? '0 0 10px rgba(59,130,246,0.5)'
-                                        : 'none'};"
-                                />
-                                <text
-                                    x={seat.pos_x + 16}
-                                    y={seat.pos_y + 20}
-                                    text-anchor="middle"
-                                    fill="white"
-                                    style="font-family: system-ui, sans-serif; font-size: 9px; font-weight: 800; pointer-events: none;"
-                                >
-                                    {seat.identifier}
-                                </text>
-                            </g>
-                        {/each}
+                                <Clock class="h-4 w-4" />
+                                Tiempo disponible para pagar:
+                            </span>
+                            <span
+                                class="rounded-lg bg-amber-500/10 px-2 py-0.5 font-mono text-sm font-black text-amber-800 dark:text-amber-400"
+                                class:timer-urgent={timeLeft < 120}
+                            >
+                                {formattedTime}
+                            </span>
+                        </div>
+
+                        <PaymentForm
+                            {auth}
+                            bind:guestName
+                            bind:guestEmail
+                            bind:guestPhone
+                            bind:showPaymentForm
+                            {paymentProcessing}
+                            {paymentError}
+                            {ticketPrice}
+                            {selectedSeatName}
+                            onpay={handlePaymentProcessing}
+                            onopen={initializeStripeForm}
+                        />
                     {/if}
-                </g>
-            </svg>
-        </div>
-
-        <div
-            style="margin-top: 1.5rem; padding: 1rem 0 0; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;"
-        >
-            <div style="display: flex; gap: 2rem; font-size: 13px;">
-                <span
-                    style="display: flex; align-items: center; gap: 8px; font-weight: 600; color: #475569;"
-                >
-                    <div
-                        style="width: 14px; height: 14px; background: #10b981; border-radius: 4px;"
-                    ></div>
-                    Disponible
-                </span>
-                <span
-                    style="display: flex; align-items: center; gap: 8px; font-weight: 600; color: #475569;"
-                >
-                    <div
-                        style="width: 14px; height: 14px; background: #ef4444; border-radius: 4px;"
-                    ></div>
-                    Ocupado
-                </span>
-                <span
-                    style="display: flex; align-items: center; gap: 8px; font-weight: 600; color: #475569;"
-                >
-                    <div
-                        style="width: 14px; height: 14px; background: #3b82f6; border-radius: 4px;"
-                    ></div>
-                    Tu Selección
-                </span>
-            </div>
-
-            <div style="display: flex; align-items: center; gap: 1rem;">
-                {#if selectedSeatId}
-                    <div
-                        style="display: flex; align-items: center; gap: 1rem; background: #f0fdf4; padding: 8px 16px; border-radius: 12px; border: 1px solid #bbf7d0;"
-                    >
-                        <p
-                            style="margin: 0; font-weight: bold; color: #166534; font-size: 15px;"
-                        >
-                            Asiento: {selectedSeatName}
-                        </p>
-                        <button
-                            onclick={confirmarReserva}
-                            style="background-color: #10b981; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 800; cursor: pointer; text-transform: uppercase; font-size: 13px; letter-spacing: 0.5px; transition: background 0.2s;"
-                        >
-                            Confirmar Reserva
-                        </button>
-                    </div>
-                {/if}
+                </div>
             </div>
         </div>
-    </div>
+    </main>
 </div>
 
+<!-- Animaciones personalizadas -->
 <style>
-    button:active {
-        transform: scale(0.96);
+    .timer-urgent {
+        color: #ef4444;
+        background: #fee2e2;
+        animation: pulse 1s infinite alternate;
     }
-    button:hover:not(:disabled) {
-        background-color: #059669; /* emerald-600 */
-    }
-    g[onclick='selectSeat'] rect {
-        pointer-events: all;
+
+    @keyframes pulse {
+        from {
+            opacity: 1;
+        }
+        to {
+            opacity: 0.6;
+        }
     }
 </style>

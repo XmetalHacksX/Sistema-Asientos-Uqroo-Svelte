@@ -17,6 +17,7 @@
         building_id: number | null;
         building?: { id: number; name: string } | null;
         nodes_count?: number;
+        is_template?: boolean;
     };
 
     let { spaces }: { spaces: SpaceRow[] } = $props();
@@ -67,16 +68,23 @@
                             class="border-t border-sidebar-border/60 dark:border-sidebar-border"
                         >
                             <td class="px-4 py-3 font-medium text-foreground">
-                                {s.name}
+                                <div class="flex items-center gap-2">
+                                    <span>{s.name}</span>
+                                    {#if s.is_template}
+                                        <span class="inline-flex items-center rounded bg-emerald-600/10 px-1.5 py-0.5 text-xs font-bold text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400 border border-emerald-500/20">
+                                            Plantilla
+                                        </span>
+                                    {/if}
+                                </div>
                             </td>
-                            <td class="px-4 py-3">
+                            <td class="px-4 py-3 text-muted-foreground">
                                 {s.building?.name ??
                                     (s.building_id ? `#${s.building_id}` : '-')}
                             </td>
-                            <td class="px-4 py-3">
+                            <td class="px-4 py-3 text-muted-foreground font-semibold">
                                 {typeof s.nodes_count === 'number'
-                                    ? s.nodes_count
-                                    : `ID: ${s.id}`}
+                                    ? `${s.nodes_count} asientos`
+                                    : 'Sin asientos'}
                             </td>
                             <td class="px-4 py-3 text-right">
                                 <div class="inline-flex items-center gap-2">

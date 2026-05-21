@@ -2,35 +2,9 @@
     import { router } from '@inertiajs/svelte';
     import Panzoom from '@panzoom/panzoom';
     import { onMount, untrack } from 'svelte';
-
-    export type EditorNode = {
-        id: number;
-        identifier: string;
-        pos_x: number;
-        pos_y: number;
-        status: string;
-        is_occupied?: boolean;
-    };
-
-    export type LayoutObject = {
-        id: number;
-        type: string;
-        properties: {
-            width: number;
-            height: number;
-            label: string;
-            color: string;
-            pos_x: number;
-            pos_y: number;
-        };
-    };
-
-    export type EditorSpace = {
-        id: number;
-        name: string;
-        nodes: EditorNode[];
-        layout_objects?: LayoutObject[];
-    };
+    import { getSeatColor, calculateZoomPosition } from './TheaterPlanEditor/editorUtils';
+    import type { EditorNode, LayoutObject, EditorSpace } from './TheaterPlanEditor/editorUtils';
+    import EditorSidebar from './TheaterPlanEditor/EditorSidebar.svelte';
 
     let { space }: { space: EditorSpace } = $props();
 
@@ -38,7 +12,6 @@
     let layoutObjects = $state<LayoutObject[]>([]);
     let editMode = $state(false);
 
-    // Cambiamos selectedId para que sepa si es un nodo o un objeto
     let selectedItem = $state<{ type: 'node' | 'object'; id: number } | null>(
         null,
     );
@@ -77,17 +50,10 @@
             if (!parent) return;
 
             const scale = 0.3;
-            const x =
-                parent.clientWidth / 2 -
-                (bbox.width * scale) / 2 -
-                bbox.x * scale;
-            const y =
-                parent.clientHeight / 2 -
-                (bbox.height * scale) / 2 -
-                bbox.y * scale;
+            const pos = calculateZoomPosition(parent.clientWidth, parent.clientHeight, bbox, scale);
 
-            panzoomInstance.zoom(scale, { animate: false });
-            panzoomInstance.pan(x, y, { animate: false });
+            panzoomInstance.zoom(pos.scale, { animate: false });
+            panzoomInstance.pan(pos.x, pos.y, { animate: false });
         }, 150);
 
         const parent = svgGroup.parentElement;
@@ -126,30 +92,6 @@
         layoutObjects = [...layoutObjects, newObj];
         selectedItem = { type: 'object', id: newObj.id };
         hasChanges = true;
-    }
-
-    function deleteSelected() {
-        if (!selectedItem) return;
-        if (selectedItem.type === 'node') {
-            nodes = nodes.filter((n) => n.id !== selectedItem?.id);
-        } else {
-            layoutObjects = layoutObjects.filter(
-                (o) => o.id !== selectedItem?.id,
-            );
-        }
-        selectedItem = null;
-        hasChanges = true;
-    }
-
-    function toggleAccessibility() {
-        if (selectedItem?.type !== 'node') return;
-        const node = nodes.find((n) => n.id === selectedItem?.id);
-        if (node) {
-            node.identifier = node.identifier.includes('♿')
-                ? node.identifier.replace(' ♿', '')
-                : node.identifier + ' ♿';
-            hasChanges = true;
-        }
     }
 
     // --- MANEJO DE EVENTOS ---
@@ -210,14 +152,6 @@
                 onSuccess: () => (hasChanges = false),
             },
         );
-    }
-
-    function getSeatColor(node: EditorNode) {
-        if (selectedItem?.type === 'node' && selectedItem.id === node.id)
-            return '#3b82f6';
-        if (node.status === 'maintenance') return '#f59e0b';
-        if (node.status === 'blocked') return '#64748b';
-        return '#10b981';
     }
 </script>
 
@@ -319,7 +253,7 @@
                             width="32"
                             height="32"
                             rx="7"
-                            fill={getSeatColor(node)}
+                            fill={getSeatColor(node, selectedItem)}
                             stroke={selectedItem?.type === 'node' &&
                             selectedItem.id === node.id
                                 ? 'white'
@@ -343,127 +277,11 @@
         </svg>
     </div>
 
-    <aside
-        class="w-80 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 flex flex-col shadow-sm"
-    >
-        <h2 class="text-xl font-bold mb-6 text-zinc-900 dark:text-zinc-50">
-            Propiedades
-        </h2>
-
-        {#if selectedItem}
-            {#if selectedItem.type === 'node'}
-                {@const sn = nodes.find((n) => n.id === selectedItem?.id)}
-                {#if sn}
-                    <div class="space-y-4">
-                        <div>
-                            <label
-                                class="block text-xs font-black uppercase text-zinc-500 mb-1"
-                                >ID Asiento</label
-                            >
-                            <input
-                                bind:value={sn.identifier}
-                                oninput={() => (hasChanges = true)}
-                                class="w-full bg-zinc-100 dark:bg-zinc-800 border-none rounded-xl p-3 text-sm"
-                            />
-                        </div>
-                        <div>
-                            <label
-                                class="block text-xs font-black uppercase text-zinc-500 mb-1"
-                                >Estado</label
-                            >
-                            <select
-                                bind:value={sn.status}
-                                onchange={() => (hasChanges = true)}
-                                class="w-full bg-zinc-100 dark:bg-zinc-800 border-none rounded-xl p-3 text-sm"
-                            >
-                                <option value="active">Activo</option>
-                                <option value="maintenance"
-                                    >Mantenimiento</option
-                                >
-                                <option value="blocked">Bloqueado</option>
-                            </select>
-                        </div>
-                        <button
-                            class="w-full py-2 bg-zinc-100 dark:bg-zinc-800 rounded-xl text-sm font-bold transition-colors"
-                            onclick={toggleAccessibility}
-                        >
-                            {sn.identifier.includes('♿')
-                                ? 'Quitar ♿'
-                                : 'Marcar como ♿'}
-                        </button>
-                        <button
-                            class="w-full py-2 mt-4 bg-red-50 dark:bg-red-900/20 text-red-600 rounded-xl text-xs font-bold uppercase"
-                            onclick={deleteSelected}
-                        >
-                            🗑️ Eliminar Asiento
-                        </button>
-                        <div class="text-xs font-mono text-zinc-400 mt-2">
-                            Coord: ({Math.round(sn.pos_x)}, {Math.round(
-                                sn.pos_y,
-                            )})
-                        </div>
-                    </div>
-                {/if}
-            {:else if selectedItem.type === 'object'}
-                {@const so = layoutObjects.find(
-                    (o) => o.id === selectedItem?.id,
-                )}
-                {#if so}
-                    <div class="space-y-4">
-                        <div>
-                            <label
-                                class="block text-xs font-black uppercase text-zinc-500 mb-1"
-                                >Etiqueta</label
-                            >
-                            <input
-                                bind:value={so.properties.label}
-                                oninput={() => (hasChanges = true)}
-                                class="w-full bg-zinc-100 dark:bg-zinc-800 border-none rounded-xl p-3 text-sm"
-                            />
-                        </div>
-                        <div class="grid grid-cols-2 gap-2">
-                            <div>
-                                <label
-                                    class="block text-xs font-bold text-zinc-500 mb-1"
-                                    >Ancho</label
-                                >
-                                <input
-                                    type="number"
-                                    bind:value={so.properties.width}
-                                    oninput={() => (hasChanges = true)}
-                                    class="w-full bg-zinc-100 dark:bg-zinc-800 border-none rounded-xl p-2 text-sm"
-                                />
-                            </div>
-                            <div>
-                                <label
-                                    class="block text-xs font-bold text-zinc-500 mb-1"
-                                    >Alto</label
-                                >
-                                <input
-                                    type="number"
-                                    bind:value={so.properties.height}
-                                    oninput={() => (hasChanges = true)}
-                                    class="w-full bg-zinc-100 dark:bg-zinc-800 border-none rounded-xl p-2 text-sm"
-                                />
-                            </div>
-                        </div>
-                        <button
-                            class="w-full py-2 mt-4 bg-red-50 dark:bg-red-900/20 text-red-600 rounded-xl text-xs font-bold uppercase"
-                            onclick={deleteSelected}
-                        >
-                            🗑️ Eliminar Escenario
-                        </button>
-                    </div>
-                {/if}
-            {/if}
-        {:else}
-            <div
-                class="flex-1 flex items-center justify-center border-2 border-dashed border-zinc-100 dark:border-zinc-800 rounded-2xl"
-            >
-                <p class="text-zinc-400 text-sm italic text-center px-4">
-                    Selecciona un elemento para editarlo.
-                </p>
-            </div>
-        {/if}
-    </aside>
+    <!-- Properties panel componentized -->
+    <EditorSidebar
+        bind:selectedItem={selectedItem}
+        bind:nodes={nodes}
+        bind:layoutObjects={layoutObjects}
+        bind:hasChanges={hasChanges}
+    />
 </div>

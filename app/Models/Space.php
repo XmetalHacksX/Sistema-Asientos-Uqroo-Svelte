@@ -8,12 +8,13 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Space extends Model
 {
-    protected $fillable = ['building_id', 'name', 'viewport'];
+    protected $fillable = ['building_id', 'name', 'viewport', 'is_template'];
 
     protected function casts(): array
     {
         return [
             'viewport' => 'array',
+            'is_template' => 'boolean',
         ];
     }
 

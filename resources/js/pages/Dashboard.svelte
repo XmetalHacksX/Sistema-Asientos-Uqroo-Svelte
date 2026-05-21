@@ -12,118 +12,648 @@
 </script>
 
 <script lang="ts">
-    import { Link } from '@inertiajs/svelte';
+    import { Link, router } from '@inertiajs/svelte';
+    import { onMount } from 'svelte';
     import AppHead from '@/components/AppHead.svelte';
+    import { 
+        TrendingUp, Ticket, QrCode, Calendar, 
+        DollarSign, Building2, MapPin, Layers, 
+        ChevronRight, Percent, Activity, Users,
+        Award, BarChart3, PieChart
+    } from 'lucide-svelte';
+
+    interface StatProps {
+        campuses: number;
+        buildings: number;
+        spaces: number;
+        events: number;
+        reservations: number;
+        confirmed: number;
+        validated: number;
+        revenue: number;
+    }
+
+    interface ChartItem {
+        name?: string;
+        full_name?: string;
+        label?: string;
+        total?: number;
+        reservations?: number;
+        count?: number;
+    }
+
+    interface StatusDistributionItem {
+        status: string;
+        value: number;
+        color: string;
+    }
+
+    // Reactively receive props in Svelte 5
+    let { 
+        stats, 
+        reservationsByEvent, 
+        revenueOverTime, 
+        eventsByWeek, 
+        statusDistribution 
+    } = $props<{
+        stats: StatProps;
+        reservationsByEvent: ChartItem[];
+        revenueOverTime: ChartItem[];
+        eventsByWeek: ChartItem[];
+        statusDistribution: StatusDistributionItem[];
+    }>();
+
+    // Active tooltip states for interaction
+    let activeRevenueIndex = $state<number | null>(null);
+    let activeEventIndex = $state<number | null>(null);
+    let activeWeekIndex = $state<number | null>(null);
+    let activeDonutIndex = $state<number | null>(null);
+
+    // 1. Calculations for Revenue Over Time Chart (SVG Line & Area)
+    let maxRevenue = $derived(Math.max(...revenueOverTime.map(d => d.total ?? 0), 100));
+    let revenuePoints = $derived(revenueOverTime.map((d, i) => {
+        // Prevent division-by-zero when length <= 1
+        const x = revenueOverTime.length > 1 
+            ? i * (460 / (revenueOverTime.length - 1)) + 20 
+            : 250;
+        // y scales between 30 (top margin) and 170 (bottom margin)
+        const y = 170 - ((d.total ?? 0) / maxRevenue) * 130;
+        return { x, y, label: d.label, total: d.total };
+    }));
+
+    let revenuePath = $derived(
+        revenuePoints.length > 0 
+            ? `M ${revenuePoints[0].x} ${revenuePoints[0].y} ` + 
+              revenuePoints.slice(1).map(p => `L ${p.x} ${p.y}`).join(' ') 
+            : ''
+    );
+
+    let revenueAreaPath = $derived(
+        revenuePoints.length > 0 
+            ? `${revenuePath} L ${revenuePoints[revenuePoints.length - 1].x} 170 L ${revenuePoints[0].x} 170 Z` 
+            : ''
+    );
+
+    // 2. Calculations for Reservations by Event (SVG Bar Chart)
+    let maxReservations = $derived(Math.max(...reservationsByEvent.map(d => d.reservations ?? 0), 5));
+    let barWidth = 40;
+    let barSpacing = $derived((460 - (barWidth * reservationsByEvent.length)) / (reservationsByEvent.length + 1));
+    let barPoints = $derived(reservationsByEvent.map((d, i) => {
+        const x = barSpacing + i * (barWidth + barSpacing) + 20;
+        const height = ((d.reservations ?? 0) / maxReservations) * 130;
+        const y = 170 - height;
+        return { 
+            x, 
+            y, 
+            width: barWidth, 
+            height: Math.max(height, 4), // Min height of 4px for visual feedback
+            name: d.name, 
+            fullName: d.full_name,
+            value: d.reservations 
+        };
+    }));
+
+    // 3. Calculations for Events per Week (SVG Line Chart)
+    let maxEvents = $derived(Math.max(...eventsByWeek.map(d => d.count ?? 0), 4));
+    let weekPoints = $derived(eventsByWeek.map((d, i) => {
+        // Prevent division-by-zero when length <= 1
+        const x = eventsByWeek.length > 1 
+            ? i * (460 / (eventsByWeek.length - 1)) + 20 
+            : 250;
+        const y = 170 - ((d.count ?? 0) / maxEvents) * 130;
+        return { x, y, label: d.label, count: d.count };
+    }));
+
+    let weekPath = $derived(
+        weekPoints.length > 0 
+            ? `M ${weekPoints[0].x} ${weekPoints[0].y} ` + 
+              weekPoints.slice(1).map(p => `L ${p.x} ${p.y}`).join(' ') 
+            : ''
+    );
+
+    let weekAreaPath = $derived(
+        weekPoints.length > 0 
+            ? `${weekPath} L ${weekPoints[weekPoints.length - 1].x} 170 L ${weekPoints[0].x} 170 Z` 
+            : ''
+    );
+
+    // 4. Calculations for Reservation Status Distribution (SVG Donut Chart)
+    let totalStatus = $derived(statusDistribution.reduce((sum, item) => sum + item.value, 0));
+    let donutSegments = $derived(() => {
+        let accumulatedPercent = 0;
+        const circumference = 314.159; // 2 * PI * r (r=50)
+        return statusDistribution.map((item, index) => {
+            const percent = totalStatus > 0 ? (item.value / totalStatus) : 0;
+            const strokeLength = percent * circumference;
+            const strokeOffset = circumference - (accumulatedPercent * circumference);
+            accumulatedPercent += percent;
+            return {
+                ...item,
+                percent: Math.round(percent * 100),
+                strokeLength,
+                strokeOffset,
+                index
+            };
+        });
+    });
+
+    // Formatting utilities
+    const formatCurrency = (val: number) => {
+        return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(val);
+    };
+
+    // Calculate reservation scans conversion rate
+    let validationRate = $derived(
+        stats.reservations > 0 
+            ? Math.round((stats.validated / stats.reservations) * 100) 
+            : 0
+    );
+
+    onMount(() => {
+        if (window.Echo) {
+            window.Echo.channel('dashboard')
+                .listen('.dashboard.updated', () => {
+                    router.reload({
+                        only: ['stats', 'reservationsByEvent', 'revenueOverTime', 'eventsByWeek', 'statusDistribution'],
+                        preserveState: true,
+                        preserveScroll: true
+                    });
+                });
+        }
+
+        return () => {
+            if (window.Echo) {
+                window.Echo.leaveChannel('dashboard');
+            }
+        };
+    });
 </script>
 
-<AppHead title="Dashboard" />
+<AppHead title="Dashboard Administrativo" />
 
-<div class="flex h-full flex-1 flex-col gap-4 overflow-x-auto rounded-xl p-4">
-    <div
-        class="flex flex-col gap-3 rounded-xl border border-sidebar-border/70 bg-muted/30 p-4 dark:border-sidebar-border md:flex-row md:items-center md:justify-between"
-    >
+<div class="flex h-full flex-1 flex-col gap-6 overflow-y-auto p-6 bg-background text-foreground">
+    <!-- Header Block -->
+    <div class="flex flex-col gap-4 rounded-2xl border border-border bg-card/40 p-6 backdrop-blur-md md:flex-row md:items-center md:justify-between transition-all duration-300 hover:border-muted-foreground/30">
         <div>
-            <h2 class="text-base font-semibold text-foreground">
-                Sistema de Teatro y Reservas
-            </h2>
-            <p class="text-sm text-muted-foreground">
-                Administra tus campus, edificios, salas y eventos desde este
-                panel central.
+            <h1 class="text-2xl font-bold tracking-tight bg-gradient-to-r from-foreground via-foreground/90 to-muted-foreground bg-clip-text text-transparent">
+                Panel de Control de Operaciones
+            </h1>
+            <p class="text-sm text-muted-foreground mt-1">
+                Monitoreo analítico de eventos, aforos, taquilla e ingresos en tiempo real.
             </p>
         </div>
-        <div class="flex flex-wrap gap-2">
+        <div class="flex flex-wrap gap-3">
+            <Link
+                href="/admin/events"
+                class="inline-flex items-center gap-2 justify-center rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/20 hover:opacity-90 active:scale-[0.98] transition-all duration-200"
+            >
+                <Calendar class="h-4 w-4" />
+                Administrar Eventos
+            </Link>
             <Link
                 href="/admin/spaces"
-                class="inline-flex items-center justify-center rounded-lg border border-sidebar-border bg-background px-4 py-2 text-sm font-medium hover:bg-muted/50"
+                class="inline-flex items-center gap-2 justify-center rounded-xl border border-input bg-background/50 px-4 py-2.5 text-sm font-semibold hover:bg-muted/70 active:scale-[0.98] transition-all duration-200"
             >
-                Diseñar Planos de Asientos
+                <Layers class="h-4 w-4" />
+                Planos de Asientos
             </Link>
         </div>
     </div>
 
-    <div class="grid auto-rows-min gap-4 md:grid-cols-3">
-        <div
-            class="rounded-xl border border-sidebar-border/70 bg-background p-5 dark:border-sidebar-border"
-        >
-            <div class="flex h-full flex-col justify-between gap-4">
-                <div>
-                    <h3 class="text-sm font-semibold text-foreground">
-                        Gestión de Campus
-                    </h3>
-                    <p class="mt-1 text-sm text-muted-foreground">
-                        Crea y administra campus para organizar edificios.
-                    </p>
+    <!-- 4 KPI Metrics Row -->
+    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <!-- KPI 1: Revenue -->
+        <div class="relative overflow-hidden rounded-2xl border border-border bg-card p-6 transition-all duration-300 hover:shadow-xl hover:border-emerald-500/20 group">
+            <div class="absolute -right-4 -bottom-4 text-emerald-500/5 group-hover:text-emerald-500/10 group-hover:scale-110 transition-all duration-500">
+                <DollarSign class="h-32 w-32" />
+            </div>
+            <div class="flex items-center justify-between">
+                <span class="text-sm font-medium text-muted-foreground">Ingresos Totales</span>
+                <div class="p-2.5 rounded-xl bg-emerald-500/10 text-[#005E35] dark:text-emerald-400">
+                    <DollarSign class="h-5 w-5" />
                 </div>
-                <Link
-                    href="/admin/campuses"
-                    class="inline-flex w-fit items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-                >
-                    Ir a Campus
-                </Link>
+            </div>
+            <div class="mt-4">
+                <h3 class="text-2xl font-bold tracking-tight text-[#005E35] dark:text-emerald-400">
+                    {formatCurrency(stats.revenue)}
+                </h3>
+                <div class="flex items-center gap-1.5 mt-1 text-xs text-muted-foreground">
+                    <TrendingUp class="h-3.5 w-3.5 text-[#005E35] dark:text-emerald-400" />
+                    <span>Facturación acumulada</span>
+                </div>
             </div>
         </div>
-        <div
-            class="rounded-xl border border-sidebar-border/70 bg-background p-5 dark:border-sidebar-border"
-        >
-            <div class="flex h-full flex-col justify-between gap-4">
-                <div>
-                    <h3 class="text-sm font-semibold text-foreground">
-                        Gestión de Edificios
-                    </h3>
-                    <p class="mt-1 text-sm text-muted-foreground">
-                        Administra edificios y asígnalos a un campus.
-                    </p>
+
+        <!-- KPI 2: Active Bookings -->
+        <div class="relative overflow-hidden rounded-2xl border border-border bg-card p-6 transition-all duration-300 hover:shadow-xl hover:border-emerald-500/20 group">
+            <div class="absolute -right-4 -bottom-4 text-emerald-500/5 group-hover:text-emerald-500/10 group-hover:scale-110 transition-all duration-500">
+                <Ticket class="h-32 w-32" />
+            </div>
+            <div class="flex items-center justify-between">
+                <span class="text-sm font-medium text-muted-foreground">Reservas Activas</span>
+                <div class="p-2.5 rounded-xl bg-emerald-500/10 text-[#005E35] dark:text-emerald-400">
+                    <Ticket class="h-5 w-5" />
                 </div>
-                <Link
-                    href="/admin/buildings"
-                    class="inline-flex w-fit items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-                >
-                    Ir a Edificios
-                </Link>
+            </div>
+            <div class="mt-4">
+                <h3 class="text-2xl font-bold tracking-tight text-[#005E35] dark:text-emerald-400">
+                    {stats.confirmed}
+                </h3>
+                <div class="flex items-center gap-1.5 mt-1 text-xs text-muted-foreground">
+                    <Users class="h-3.5 w-3.5 text-[#005E35] dark:text-emerald-400" />
+                    <span>Boletos reservados en total: {stats.reservations}</span>
+                </div>
             </div>
         </div>
-        <div
-            class="rounded-xl border border-sidebar-border/70 bg-background p-5 dark:border-sidebar-border"
-        >
-            <div class="flex h-full flex-col justify-between gap-4">
-                <div>
-                    <h3 class="text-sm font-semibold text-foreground">
-                        Gestión de Eventos
-                    </h3>
-                    <p class="mt-1 text-sm text-muted-foreground">
-                        Crea eventos y selecciona el espacio del teatro.
-                    </p>
+
+        <!-- KPI 3: Validation / Scanned -->
+        <div class="relative overflow-hidden rounded-2xl border border-border bg-card p-6 transition-all duration-300 hover:shadow-xl hover:border-amber-500/20 group">
+            <div class="absolute -right-4 -bottom-4 text-amber-500/5 group-hover:text-amber-500/10 group-hover:scale-110 transition-all duration-500">
+                <QrCode class="h-32 w-32" />
+            </div>
+            <div class="flex items-center justify-between">
+                <span class="text-sm font-medium text-muted-foreground">Accesos Validados</span>
+                <div class="p-2.5 rounded-xl bg-amber-500/10 text-[#D49A15] dark:text-amber-400">
+                    <QrCode class="h-5 w-5" />
                 </div>
-                <Link
-                    href="/admin/events"
-                    class="inline-flex w-fit items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-                >
-                    Ir a Eventos
-                </Link>
+            </div>
+            <div class="mt-4">
+                <h3 class="text-2xl font-bold tracking-tight text-[#D49A15] dark:text-amber-400">
+                    {stats.validated}
+                </h3>
+                <div class="flex items-center gap-1.5 mt-1 text-xs text-muted-foreground">
+                    <Percent class="h-3.5 w-3.5 text-[#D49A15] dark:text-amber-400" />
+                    <span>{validationRate}% de asistencia a eventos</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- KPI 4: Infrastructure -->
+        <div class="relative overflow-hidden rounded-2xl border border-border bg-card p-6 transition-all duration-300 hover:shadow-xl hover:border-amber-500/20 group">
+            <div class="absolute -right-4 -bottom-4 text-amber-500/5 group-hover:text-amber-500/10 group-hover:scale-110 transition-all duration-500">
+                <Building2 class="h-32 w-32" />
+            </div>
+            <div class="flex items-center justify-between">
+                <span class="text-sm font-medium text-muted-foreground">Infraestructura</span>
+                <div class="p-2.5 rounded-xl bg-amber-500/10 text-[#D49A15] dark:text-amber-400">
+                    <Building2 class="h-5 w-5" />
+                </div>
+            </div>
+            <div class="mt-4">
+                <h3 class="text-2xl font-bold tracking-tight text-[#D49A15] dark:text-amber-400">
+                    {stats.spaces} <span class="text-sm font-normal text-muted-foreground">Salas</span>
+                </h3>
+                <div class="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+                    <MapPin class="h-3.5 w-3.5 text-[#D49A15] dark:text-amber-450" />
+                    <span>{stats.campuses} Campus • {stats.buildings} Edificios</span>
+                </div>
             </div>
         </div>
     </div>
-    <div
-        class="relative min-h-screen flex-1 rounded-xl border border-sidebar-border/70 md:min-h-min dark:border-sidebar-border"
-    >
-        <div class="h-full rounded-xl bg-background p-5">
-            <div class="flex h-full flex-col justify-between gap-4">
+
+    <!-- Charts Layout Grid -->
+    <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+        
+        <!-- Chart 1: Revenue trend (Area Chart) -->
+        <div class="lg:col-span-2 rounded-2xl border border-border bg-card p-6 flex flex-col justify-between shadow-sm relative group">
+            <div class="flex items-center justify-between mb-4">
                 <div>
-                    <h3 class="text-sm font-semibold text-foreground">
-                        Gestión de Espacios / Salas
+                    <h3 class="text-base font-bold tracking-tight text-foreground flex items-center gap-2">
+                        <TrendingUp class="h-4.5 w-4.5 text-emerald-500" />
+                        Historial de Ingresos Mensuales
                     </h3>
-                    <p class="mt-1 text-sm text-muted-foreground">
-                        Crea las salas para los edificios y genera la cuadrícula
-                        de asientos automáticamente.
-                    </p>
+                    <p class="text-xs text-muted-foreground mt-0.5">Comportamiento financiero en los últimos 6 meses.</p>
                 </div>
-                <Link
-                    href="/admin/spaces"
-                    class="inline-flex w-fit items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-                >
-                    Ir a Espacios
-                </Link>
+                <span class="text-xs font-semibold px-2 py-1 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/10">MXN</span>
+            </div>
+
+            <!-- SVG Container -->
+            <div class="relative w-full h-[220px] mt-2 select-none">
+                <svg viewBox="0 0 500 200" class="w-full h-full overflow-visible">
+                    <defs>
+                        <linearGradient id="revenueGlow" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#10b981" stop-opacity="0.25"/>
+                            <stop offset="100%" stop-color="#10b981" stop-opacity="0.0"/>
+                        </linearGradient>
+                    </defs>
+
+                    <!-- Horizontal Grid Lines -->
+                    <line x1="20" y1="40" x2="480" y2="40" stroke="var(--color-border)" stroke-width="0.5" stroke-dasharray="3,3" />
+                    <line x1="20" y1="105" x2="480" y2="105" stroke="var(--color-border)" stroke-width="0.5" stroke-dasharray="3,3" />
+                    <line x1="20" y1="170" x2="480" y2="170" stroke="var(--color-border)" stroke-width="0.5" />
+
+                    <!-- Area Filled -->
+                    {#if revenueAreaPath}
+                        <path d={revenueAreaPath} fill="url(#revenueGlow)" class="transition-all duration-500" />
+                    {/if}
+
+                    <!-- Line Path -->
+                    {#if revenuePath}
+                        <path 
+                            d={revenuePath} 
+                            fill="none" 
+                            stroke="#10b981" 
+                            stroke-width="2.5" 
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class="transition-all duration-500"
+                        />
+                    {/if}
+
+                    <!-- Interactive Data Points -->
+                    {#each revenuePoints as point, i}
+                        <!-- Hover trigger area (vertical bar invisible) -->
+                        <!-- svelte-ignore a11y_no_static_element_interactions -->
+                        <rect 
+                            x={point.x - 20} 
+                            y="20" 
+                            width="40" 
+                            height="150" 
+                            fill="transparent" 
+                            class="cursor-pointer"
+                            onmouseenter={() => activeRevenueIndex = i}
+                            onmouseleave={() => activeRevenueIndex = null}
+                        />
+
+                        <!-- Visible circle point -->
+                        <circle 
+                            cx={point.x} 
+                            cy={point.y} 
+                            r={activeRevenueIndex === i ? 6 : 4} 
+                            fill={activeRevenueIndex === i ? '#10b981' : 'var(--color-background)'} 
+                            stroke="#10b981" 
+                            stroke-width="2" 
+                            class="transition-all duration-150 pointer-events-none"
+                        />
+
+                        <!-- X Axis Labels -->
+                        <text 
+                            x={point.x} 
+                            y="192" 
+                            text-anchor="middle" 
+                            fill="var(--color-muted-foreground)" 
+                            class="text-[10px] font-medium tracking-tight font-sans pointer-events-none"
+                        >
+                            {point.label}
+                        </text>
+                    {/each}
+                </svg>
+
+                <!-- Dynamic HTML Tooltip inside relative layout -->
+                {#if activeRevenueIndex !== null}
+                    {@const item = revenuePoints[activeRevenueIndex]}
+                    <div 
+                        class="absolute z-10 p-3 rounded-xl border border-emerald-500/20 bg-card/95 backdrop-blur-md shadow-xl text-left pointer-events-none transition-all duration-150 animate-in fade-in zoom-in-95"
+                        style="left: calc({(item.x / 500) * 100}% - 70px); top: calc({(item.y / 200) * 100}% - 75px);"
+                    >
+                        <p class="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">{item.label}</p>
+                        <p class="text-sm font-extrabold text-emerald-400 mt-0.5">{formatCurrency(item.total ?? 0)}</p>
+                    </div>
+                {/if}
             </div>
         </div>
+
+        <!-- Chart 2: Ticket Status Distribution (Donut Chart) -->
+        <div class="rounded-2xl border border-border bg-card p-6 flex flex-col justify-between shadow-sm group">
+            <div>
+                <h3 class="text-base font-bold tracking-tight text-foreground flex items-center gap-2">
+                    <PieChart class="h-4.5 w-4.5 text-blue-500" />
+                    Estado de Boletos
+                </h3>
+                <p class="text-xs text-muted-foreground mt-0.5">Proporción general de estatus de aforo.</p>
+            </div>
+
+            <!-- SVG Container -->
+            <div class="relative flex items-center justify-center h-[170px] mt-4 select-none">
+                <svg viewBox="0 0 120 120" class="w-[140px] h-[140px] transform -rotate-90 overflow-visible">
+                    {#each donutSegments() as segment}
+                        <!-- svelte-ignore a11y_no_static_element_interactions -->
+                        <circle 
+                            cx="60" 
+                            cy="60" 
+                            r="50" 
+                            fill="transparent" 
+                            stroke={segment.color} 
+                            stroke-width={activeDonutIndex === segment.index ? 12 : 9}
+                            stroke-dasharray="{segment.strokeLength} 314.159"
+                            stroke-dashoffset={segment.strokeOffset}
+                            stroke-linecap="round"
+                            class="transition-all duration-200 cursor-pointer"
+                            onmouseenter={() => activeDonutIndex = segment.index}
+                            onmouseleave={() => activeDonutIndex = null}
+                        />
+                    {/each}
+                </svg>
+
+                <!-- Centered content in donut -->
+                <div class="absolute flex flex-col items-center justify-center pointer-events-none">
+                    {#if activeDonutIndex !== null}
+                        {@const activeSeg = donutSegments()[activeDonutIndex]}
+                        <span class="text-xl font-extrabold tracking-tight" style="color: {activeSeg.color}">
+                            {activeSeg.percent}%
+                        </span>
+                        <span class="text-[9px] uppercase font-bold text-muted-foreground max-w-[90px] text-center truncate">
+                            {activeSeg.status}
+                        </span>
+                    {:else}
+                        <span class="text-2xl font-extrabold tracking-tight text-foreground">
+                            {totalStatus}
+                        </span>
+                        <span class="text-[10px] text-muted-foreground font-medium">Reservas</span>
+                    {/if}
+                </div>
+            </div>
+
+            <!-- Donut Legend -->
+            <div class="mt-4 space-y-2">
+                {#each donutSegments() as segment}
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <div 
+                        class="flex items-center justify-between text-xs p-1.5 rounded-lg transition-colors cursor-pointer {activeDonutIndex === segment.index ? 'bg-muted' : 'hover:bg-muted/30'}"
+                        onmouseenter={() => activeDonutIndex = segment.index}
+                        onmouseleave={() => activeDonutIndex = null}
+                    >
+                        <div class="flex items-center gap-2">
+                            <span class="w-2.5 h-2.5 rounded-full" style="background-color: {segment.color}"></span>
+                            <span class="font-medium text-muted-foreground">{segment.status}</span>
+                        </div>
+                        <span class="font-bold text-foreground">{segment.value} ({segment.percent}%)</span>
+                    </div>
+                {/each}
+            </div>
+        </div>
+
+        <!-- Chart 3: Active bookings by event (Bar Chart) -->
+        <div class="rounded-2xl border border-border bg-card p-6 flex flex-col justify-between shadow-sm group relative">
+            <div>
+                <h3 class="text-base font-bold tracking-tight text-foreground flex items-center gap-2">
+                    <BarChart3 class="h-4.5 w-4.5 text-[#D49A15] dark:text-amber-400" />
+                    Reservas por Evento
+                </h3>
+                <p class="text-xs text-muted-foreground mt-0.5">Demanda de boletos en tus últimos espectáculos.</p>
+            </div>
+
+            <!-- SVG Container -->
+            <div class="relative w-full h-[200px] mt-4 select-none">
+                <svg viewBox="0 0 500 200" class="w-full h-full overflow-visible">
+                    <!-- Horizontal Grid Lines -->
+                    <line x1="20" y1="40" x2="480" y2="40" stroke="var(--color-border)" stroke-width="0.5" stroke-dasharray="3,3" />
+                    <line x1="20" y1="105" x2="480" y2="105" stroke="var(--color-border)" stroke-width="0.5" stroke-dasharray="3,3" />
+                    <line x1="20" y1="170" x2="480" y2="170" stroke="var(--color-border)" stroke-width="0.5" />
+
+                    {#each barPoints as bar, i}
+                        <!-- svelte-ignore a11y_no_static_element_interactions -->
+                        <rect 
+                            x={bar.x} 
+                            y={bar.y} 
+                            width={bar.width} 
+                            height={bar.height} 
+                            rx="5" 
+                            fill={activeEventIndex === i ? 'url(#barHoverGlow)' : 'url(#barGlow)'}
+                            stroke={activeEventIndex === i ? '#fbbf24' : '#d49a15'}
+                            stroke-width="1.5"
+                            class="transition-all duration-200 cursor-pointer"
+                            onmouseenter={() => activeEventIndex = i}
+                            onmouseleave={() => activeEventIndex = null}
+                        />
+
+                        <!-- X Axis Short Labels -->
+                        <text 
+                            x={bar.x + bar.width / 2} 
+                            y="190" 
+                            text-anchor="middle" 
+                            fill="var(--color-muted-foreground)" 
+                            class="text-[9px] font-semibold font-sans pointer-events-none"
+                        >
+                            {bar.name}
+                        </text>
+                    {/each}
+
+                    <!-- Gradients for premium bar colors -->
+                    <defs>
+                        <linearGradient id="barGlow" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.85"/>
+                            <stop offset="100%" stop-color="#d49a15" stop-opacity="0.3"/>
+                        </linearGradient>
+                        <linearGradient id="barHoverGlow" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#fef08a" stop-opacity="1"/>
+                            <stop offset="100%" stop-color="#fbbf24" stop-opacity="0.5"/>
+                        </linearGradient>
+                    </defs>
+                </svg>
+
+                <!-- Dynamic Tooltip -->
+                {#if activeEventIndex !== null}
+                    {@const bar = barPoints[activeEventIndex]}
+                    <div 
+                        class="absolute z-10 p-3 rounded-xl border border-amber-500/20 bg-card/95 backdrop-blur-md shadow-xl text-left pointer-events-none transition-all duration-150 animate-in fade-in zoom-in-95"
+                        style="left: calc({(bar.x / 500) * 100}% - 60px); top: calc({(bar.y / 200) * 100}% - 75px);"
+                    >
+                        <p class="text-[10px] uppercase font-bold tracking-wider text-muted-foreground max-w-[140px] truncate">{bar.fullName}</p>
+                        <p class="text-sm font-extrabold text-[#D49A15] dark:text-amber-400 mt-0.5">{bar.value} Reservas</p>
+                    </div>
+                {/if}
+            </div>
+        </div>
+
+        <!-- Chart 4: Events density per week (Timeline / Line chart) -->
+        <div class="lg:col-span-2 rounded-2xl border border-border bg-card p-6 flex flex-col justify-between shadow-sm relative group">
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h3 class="text-base font-bold tracking-tight text-foreground flex items-center gap-2">
+                        <Activity class="h-4.5 w-4.5 text-[#005E35] dark:text-emerald-400" />
+                        Densidad de Eventos por Semana
+                    </h3>
+                    <p class="text-xs text-muted-foreground mt-0.5">Programación y flujo operativo de espectáculos activos.</p>
+                </div>
+                <span class="text-xs font-semibold px-2 py-1 rounded bg-emerald-500/10 text-[#005E35] dark:text-emerald-450 border border-emerald-500/10">Semanas</span>
+            </div>
+
+            <!-- SVG Container -->
+            <div class="relative w-full h-[200px] mt-2 select-none">
+                <svg viewBox="0 0 500 200" class="w-full h-full overflow-visible">
+                    <defs>
+                        <linearGradient id="weekGlow" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#10b981" stop-opacity="0.25"/>
+                            <stop offset="100%" stop-color="#10b981" stop-opacity="0.0"/>
+                        </linearGradient>
+                    </defs>
+
+                    <!-- Horizontal Grid Lines -->
+                    <line x1="20" y1="40" x2="480" y2="40" stroke="var(--color-border)" stroke-width="0.5" stroke-dasharray="3,3" />
+                    <line x1="20" y1="105" x2="480" y2="105" stroke="var(--color-border)" stroke-width="0.5" stroke-dasharray="3,3" />
+                    <line x1="20" y1="170" x2="480" y2="170" stroke="var(--color-border)" stroke-width="0.5" />
+
+                    <!-- Area Filled -->
+                    {#if weekAreaPath}
+                        <path d={weekAreaPath} fill="url(#weekGlow)" class="transition-all duration-500" />
+                    {/if}
+
+                    <!-- Line Path -->
+                    {#if weekPath}
+                        <path 
+                            d={weekPath} 
+                            fill="none" 
+                            stroke="#10b981" 
+                            stroke-width="2.5" 
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class="transition-all duration-500"
+                        />
+                    {/if}
+
+                    <!-- Interactive Data Points -->
+                    {#each weekPoints as point, i}
+                        <!-- Hover trigger area -->
+                        <!-- svelte-ignore a11y_no_static_element_interactions -->
+                        <rect 
+                            x={point.x - 20} 
+                            y="20" 
+                            width="40" 
+                            height="150" 
+                            fill="transparent" 
+                            class="cursor-pointer"
+                            onmouseenter={() => activeWeekIndex = i}
+                            onmouseleave={() => activeWeekIndex = null}
+                        />
+
+                        <!-- Point Circle -->
+                        <circle 
+                            cx={point.x} 
+                            cy={point.y} 
+                            r={activeWeekIndex === i ? 6 : 4} 
+                            fill={activeWeekIndex === i ? '#10b981' : 'var(--color-background)'} 
+                            stroke="#10b981" 
+                            stroke-width="2" 
+                            class="transition-all duration-150 pointer-events-none"
+                        />
+
+                        <!-- X Axis Labels -->
+                        <text 
+                            x={point.x} 
+                            y="190" 
+                            text-anchor="middle" 
+                            fill="var(--color-muted-foreground)" 
+                            class="text-[9px] font-semibold pointer-events-none"
+                        >
+                            {point.label.replace('Sem. ', 'S')}
+                        </text>
+                    {/each}
+                </svg>
+
+                <!-- Dynamic HTML Tooltip -->
+                {#if activeWeekIndex !== null}
+                    {@const item = weekPoints[activeWeekIndex]}
+                    <div 
+                        class="absolute z-10 p-3 rounded-xl border border-emerald-500/20 bg-card/95 backdrop-blur-md shadow-xl text-left pointer-events-none transition-all duration-150 animate-in fade-in zoom-in-95"
+                        style="left: calc({(item.x / 500) * 100}% - 70px); top: calc({(item.y / 200) * 100}% - 75px);"
+                    >
+                        <p class="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">{item.label}</p>
+                        <p class="text-sm font-extrabold text-emerald-400 mt-0.5">{item.count} Espectáculos</p>
+                    </div>
+                {/if}
+            </div>
+        </div>
+
     </div>
 </div>

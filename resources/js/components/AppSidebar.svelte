@@ -20,6 +20,8 @@
     import { toUrl } from '@/lib/utils';
     import { dashboard } from '@/routes';
     import type { NavItem } from '@/types';
+    import { page } from '@inertiajs/svelte';
+    import type { PageProps } from '@inertiajs/core';
 
     let {
         children,
@@ -39,12 +41,35 @@
         return items;
     });
 
-    const adminNavItems: NavItem[] = [
-        { title: 'Campus', href: '/admin/campuses' },
-        { title: 'Edificios', href: '/admin/buildings' },
-        { title: 'Salas/Teatros', href: '/admin/spaces' },
-        { title: 'Eventos', href: '/admin/events' },
-    ];
+    const isSuperAdmin = $derived((page.props as any).auth?.user?.roles?.includes('super-admin') ?? false);
+    const canValidateTickets = $derived(
+        isSuperAdmin ||
+        ((page.props as any).auth?.user?.roles?.includes('validador') ?? false) ||
+        ((page.props as any).auth?.user?.permissions?.includes('validate-tickets') ?? false)
+    );
+
+    const adminNavItems = $derived.by((): NavItem[] => {
+        let items: NavItem[] = [
+            { title: 'Campus', href: '/admin/campuses' },
+            { title: 'Edificios', href: '/admin/buildings' },
+            { title: 'Eventos', href: '/admin/events' },
+        ];
+
+        if (canValidateTickets) {
+            items.push(
+                { title: 'Validar Boletos (QR)', href: '/admin/boletos/escanear' }
+            );
+        }
+
+        if (isSuperAdmin) {
+            items.push(
+                { title: 'Salas/Teatros', href: '/admin/spaces' },
+                { title: 'Roles y Permisos', href: '/admin/roles' }
+            );
+        }
+
+        return items;
+    });
 
     const footerNavItems: NavItem[] = [
         {

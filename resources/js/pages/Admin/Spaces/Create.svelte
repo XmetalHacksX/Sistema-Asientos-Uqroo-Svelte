@@ -11,27 +11,37 @@
 <script lang="ts">
     import AppHead from '@/components/AppHead.svelte';
     import { Link, router } from '@inertiajs/svelte';
+    import { slide } from 'svelte/transition';
 
     type Building = {
         id: number;
         name: string;
     };
 
-    let { buildings }: { buildings: Building[] } = $props();
+    type TemplateSpace = {
+        id: number;
+        name: string;
+    };
+
+    let { buildings, templates = [] }: { buildings: Building[]; templates: TemplateSpace[] } = $props();
 
     let data = $state({
         building_id: '' as string | number,
         name: '',
+        template_space_id: '' as string | number,
         rows: 10,
         cols: 10,
+        is_template: false,
     });
 
     function submit() {
         router.post('/admin/spaces', {
             building_id: Number(data.building_id),
             name: data.name,
-            rows: Number(data.rows),
-            cols: Number(data.cols),
+            template_space_id: data.template_space_id ? Number(data.template_space_id) : null,
+            rows: data.template_space_id ? null : Number(data.rows),
+            cols: data.template_space_id ? null : Number(data.cols),
+            is_template: data.is_template,
         });
     }
 </script>
@@ -43,7 +53,7 @@
         <div>
             <h1 class="text-xl font-semibold text-foreground">Crear Sala / Teatro</h1>
             <p class="text-sm text-muted-foreground">
-                Define filas y asientos por fila para generar el plano base.
+                Define una plantilla para clonar o especifica filas y asientos para una retícula base.
             </p>
         </div>
         <Link
@@ -92,42 +102,76 @@
             />
         </div>
 
-        <div class="grid gap-4 md:grid-cols-2">
-            <div>
-                <label class="block text-sm font-medium text-foreground" for="rows"
-                    >Filas</label
-                >
-                <input
-                    id="rows"
-                    type="number"
-                    min="1"
-                    class="mt-1 w-full rounded-lg border border-sidebar-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
-                    bind:value={data.rows}
-                    required
-                />
+        <div>
+            <label
+                class="block text-sm font-medium text-foreground"
+                for="template_space_id"
+                >Clonar desde Plantilla (Opcional)</label
+            >
+            <select
+                id="template_space_id"
+                class="mt-1 w-full rounded-lg border border-sidebar-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+                bind:value={data.template_space_id}
+            >
+                <option value="">Generar sala vacía (desde cero)</option>
+                {#each templates as t (t.id)}
+                    <option value={t.id}>{t.name}</option>
+                {/each}
+            </select>
+        </div>
+
+        {#if !data.template_space_id}
+            <div class="grid gap-4 md:grid-cols-2" transition:slide={{ duration: 200 }}>
+                <div>
+                    <label class="block text-sm font-medium text-foreground" for="rows"
+                        >Filas</label
+                    >
+                    <input
+                        id="rows"
+                        type="number"
+                        min="1"
+                        class="mt-1 w-full rounded-lg border border-sidebar-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+                        bind:value={data.rows}
+                        required={!data.template_space_id}
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-foreground" for="cols"
+                        >Asientos por fila</label
+                    >
+                    <input
+                        id="cols"
+                        type="number"
+                        min="1"
+                        class="mt-1 w-full rounded-lg border border-sidebar-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+                        bind:value={data.cols}
+                        required={!data.template_space_id}
+                    />
+                </div>
             </div>
-            <div>
-                <label class="block text-sm font-medium text-foreground" for="cols"
-                    >Asientos por fila</label
-                >
-                <input
-                    id="cols"
-                    type="number"
-                    min="1"
-                    class="mt-1 w-full rounded-lg border border-sidebar-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
-                    bind:value={data.cols}
-                    required
-                />
-            </div>
+        {/if}
+
+        <div class="flex items-center gap-2 py-2">
+            <input
+                id="is_template"
+                type="checkbox"
+                class="h-4 w-4 rounded border-sidebar-border text-primary focus:ring-primary bg-background"
+                bind:checked={data.is_template}
+            />
+            <label
+                for="is_template"
+                class="text-sm font-medium text-foreground cursor-pointer select-none"
+                >Marcar esta sala como Plantilla reutilizable</label
+            >
         </div>
 
         <div class="flex gap-2">
             <button
                 type="submit"
-                class="inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-                disabled={data.building_id === ''}
+                class="inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                disabled={data.building_id === '' || data.name.trim() === ''}
             >
-                Crear y Generar Asientos
+                {data.template_space_id ? 'Clonar y Crear Sala' : 'Crear y Generar Asientos'}
             </button>
             <Link
                 href="/admin/spaces"
@@ -138,4 +182,3 @@
         </div>
     </form>
 </div>
-

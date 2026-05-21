@@ -40,7 +40,7 @@ class TheaterLayoutSeeder extends Seeder
         // ==========================================
         // NUEVO: CREAR UN EVENTO DE PRUEBA
         // ==========================================
-        Event::firstOrCreate(
+        $event = Event::updateOrCreate(
             ['name' => 'Gran Estreno MVP'], // Buscamos por nombre
             [
                 'space_id' => $space->id, // Lo enlazamos a la sala que acabamos de crear
@@ -50,6 +50,30 @@ class TheaterLayoutSeeder extends Seeder
                 'end_time' => Carbon::now()->addDays(5)->setTime(20, 30),  // Termina a las 8:30 PM
             ]
         );
+
+        // Limpiamos y re-clonamos los asientos del evento desde los nuevos nodos del espacio
+        \App\Models\EventSeat::where('event_id', $event->id)->delete();
+        
+        $nodes = \App\Models\Node::where('space_id', $space->id)->get();
+        $seatsToInsert = [];
+        $now = now();
+        
+        foreach ($nodes as $node) {
+            $seatsToInsert[] = [
+                'event_id' => $event->id,
+                'user_id' => null,
+                'identifier' => $node->identifier,
+                'pos_x' => $node->pos_x,
+                'pos_y' => $node->pos_y,
+                'status' => 'disponible',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        if (!empty($seatsToInsert)) {
+            \App\Models\EventSeat::insert($seatsToInsert);
+        }
 
         $this->command?->info('Edificio, espacio, nodos y evento del teatro listos.');
     }

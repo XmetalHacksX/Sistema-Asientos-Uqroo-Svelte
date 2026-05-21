@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\Event;
 use App\Models\Space;
+use App\Models\Node;
+use App\Models\EventSeat;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage; // <-- IMPORTANTE: Añadimos Storage
 use Inertia\Inertia;
@@ -44,7 +46,31 @@ class EventController extends Controller
             $data['poster_url'] = '/storage/' . $path;
         }
 
-        Event::create($data);
+        $event = Event::create($data);
+
+        // Clonación de la plantilla de asientos del espacio seleccionado hacia el evento
+        $nodes = Node::where('space_id', $event->space_id)->get();
+        $seatsToInsert = [];
+        $now = now();
+        
+        foreach ($nodes as $node) {
+            // Solo clonamos aquellos asientos que estén activos en el layout original, o todos según regla genérica.
+            // La instrucción dice: "Esta tabla debe tener EXACTAMENTE las mismas columnas... clonar esos asientos originales"
+            $seatsToInsert[] = [
+                'event_id' => $event->id,
+                'user_id' => null,
+                'identifier' => $node->identifier,
+                'pos_x' => $node->pos_x,
+                'pos_y' => $node->pos_y,
+                'status' => 'disponible',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        if (!empty($seatsToInsert)) {
+            EventSeat::insert($seatsToInsert);
+        }
 
         return redirect()->route('admin.events.index');
     }

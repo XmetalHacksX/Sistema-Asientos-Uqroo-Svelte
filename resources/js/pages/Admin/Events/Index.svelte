@@ -156,6 +156,12 @@
                                     class="inline-flex gap-2 justify-end w-full"
                                 >
                                     <Link
+                                        href={`/admin/events/${ev.id}/taquilla`}
+                                        class="rounded-lg bg-orange-50 px-3 py-1.5 text-sm font-medium text-orange-600 hover:bg-orange-100 border border-orange-100 transition-colors shadow-sm"
+                                    >
+                                        Taquilla
+                                    </Link>
+                                    <Link
                                         href={`/admin/events/${ev.id}/edit`}
                                         class="rounded-lg border border-sidebar-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted/50 transition-colors shadow-sm"
                                     >

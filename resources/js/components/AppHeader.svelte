@@ -9,6 +9,8 @@
     import Map from 'lucide-svelte/icons/map'; // Ícono para Edificios
     import MonitorPlay from 'lucide-svelte/icons/monitor-play'; // Ícono para Salas
     import Calendar from 'lucide-svelte/icons/calendar'; // Ícono para Eventos
+    import Users from 'lucide-svelte/icons/users';
+    import ShieldCheck from 'lucide-svelte/icons/shield-check';
 
     import AppLogo from '@/components/AppLogo.svelte';
     import AppLogoIcon from '@/components/AppLogoIcon.svelte';
@@ -62,33 +64,18 @@
     const activeItemStyles =
         'text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100';
 
-    // 1. AQUÍ AGREGAMOS LOS ENLACES PARA EL MENÚ PRINCIPAL
+    // 1. ENLACES DEFINITIVOS (CRUD Abierto)
     const mainNavItems: NavItem[] = [
-        {
-            title: 'Dashboard',
-            href: dashboard(),
-            icon: LayoutGrid,
-        },
-        {
-            title: 'Campus',
-            href: '/admin/campuses',
-            icon: Building,
-        },
-        {
-            title: 'Edificios',
-            href: '/admin/buildings',
-            icon: Map,
-        },
-        {
-            title: 'Salas/Teatros',
-            href: '/admin/spaces',
-            icon: MonitorPlay,
-        },
-        {
-            title: 'Eventos',
-            href: '/admin/events',
-            icon: Calendar,
-        },
+        { title: 'Dashboard', href: dashboard(), icon: LayoutGrid },
+        { title: 'Campus', href: '/admin/campuses', icon: Building },
+        { title: 'Edificios', href: '/admin/buildings', icon: Map },
+        { title: 'Salas/Teatros', href: '/admin/spaces', icon: MonitorPlay },
+        { title: 'Eventos', href: '/admin/events', icon: Calendar },
+    ];
+
+    const adminNavItems: NavItem[] = [
+        { title: 'Usuarios', href: '/admin/users', icon: Users },
+        { title: 'Roles y Permisos', href: '/admin/roles', icon: ShieldCheck },
     ];
 
     const rightNavItems: NavItem[] = [
@@ -150,6 +137,24 @@
                                         {item.title}
                                     </Link>
                                 {/each}
+                                {#if auth.user?.roles?.includes('super-admin')}
+                                    {#each adminNavItems as item (toUrl(item.href))}
+                                        <Link
+                                            href={toUrl(item.href)}
+                                            class="flex items-center gap-x-3 rounded-lg px-3 py-2 text-sm font-medium hover:bg-accent {url.whenCurrentUrl(
+                                                item.href,
+                                                url.currentUrl,
+                                                activeItemStyles,
+                                                '',
+                                            ) ?? ''}"
+                                        >
+                                            {#if item.icon}
+                                                <item.icon class="h-5 w-5" />
+                                            {/if}
+                                            {item.title}
+                                        </Link>
+                                    {/each}
+                                {/if}
                             </nav>
                             <div class="flex flex-col space-y-4">
                                 {#each rightNavItems as item (toUrl(item.href))}
@@ -205,6 +210,33 @@
                                 {/if}
                             </NavigationMenuItem>
                         {/each}
+                        {#if auth.user?.roles?.includes('super-admin')}
+                            {#each adminNavItems as item (toUrl(item.href))}
+                                <NavigationMenuItem
+                                    class="relative flex h-full items-center"
+                                >
+                                    <Link
+                                        class="{navigationMenuTriggerStyle()} {url.whenCurrentUrl(
+                                            item.href,
+                                            url.currentUrl,
+                                            activeItemStyles,
+                                            '',
+                                        ) ?? ''} h-9 cursor-pointer px-4"
+                                        href={toUrl(item.href)}
+                                    >
+                                        {#if item.icon}
+                                            <item.icon class="mr-2 h-4 w-4" />
+                                        {/if}
+                                        {item.title}
+                                    </Link>
+                                    {#if url.isCurrentUrl(item.href, url.currentUrl)}
+                                        <div
+                                            class="absolute bottom-0 left-0 h-0.5 w-full translate-y-px bg-black dark:bg-white"
+                                        ></div>
+                                    {/if}
+                                </NavigationMenuItem>
+                            {/each}
+                        {/if}
                     </NavigationMenuList>
                 </NavigationMenu>
             </div>

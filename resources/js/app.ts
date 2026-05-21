@@ -1,3 +1,4 @@
+import './echo';
 import { createInertiaApp } from '@inertiajs/svelte';
 import AppLayout from '@/layouts/AppLayout.svelte';
 import AuthLayout from '@/layouts/AuthLayout.svelte';
@@ -15,6 +16,8 @@ createInertiaApp({
                 return null;
             // AGREGAMOS ESTE NUEVO CASO PARA TUS RESERVAS PÚBLICAS
             case name.startsWith('Reservations/'):
+                return null;
+            case name.startsWith('Tickets/'):
                 return null;
             case name.startsWith('auth/'):
                 return AuthLayout;

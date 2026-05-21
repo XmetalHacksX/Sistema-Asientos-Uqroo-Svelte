@@ -3,73 +3,233 @@
 namespace App\Http\Controllers;
 
 use App\Models\Event;
-use App\Models\Node;
 use App\Models\Reservation;
 use App\Models\Space;
+use App\Services\ReservationManager;
+use App\Services\StripePaymentService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Inertia\Inertia;
+use Exception;
 
 class ReservationController extends Controller
 {
-    // ============================================================
-    // INGENIERÍA: Cambiamos 'index' por 'show' y recibimos las variables
-    // ============================================================
+    protected ReservationManager $reservationManager;
+    protected StripePaymentService $stripePaymentService;
+
+    public function __construct(
+        ReservationManager $reservationManager,
+        StripePaymentService $stripePaymentService
+    ) {
+        $this->reservationManager = $reservationManager;
+        $this->stripePaymentService = $stripePaymentService;
+    }
+
     public function show(Space $space, Event $event)
     {
-        // Cargamos las relaciones para la sala que viene en la URL
-        $space->load(['nodes.reservations', 'layoutObjects']);
+        $space->load(['layoutObjects']);
 
-        // Verificamos ocupación específica para EL evento que viene en la URL
-        $space->nodes->transform(function ($node) use ($event) {
-            $node->is_occupied = $node->reservations()
-                ->where('event_id', $event->id)
-                ->where('status', 'confirmed')
-                ->exists()
-                || ! in_array($node->status, ['active'], true);
-            return $node;
-        });
+        $eventSeats = \App\Models\EventSeat::where('event_id', $event->id)->get();
 
-        // Enviamos el teatro y el evento a Svelte
         return Inertia::render('Reservations/Index', [
-            'space' => $space,
-            'event' => $event
+            'space'       => $space,
+            'event'       => $event,
+            'seats'       => $eventSeats,
+            'stripeKey'   => config('cashier.key'),
+            'ticketPrice' => config('tickets.ticket_price_mxn'),
         ]);
     }
 
-    // Función para guardar la reserva (Se mantiene intacta)
     public function reservar(Request $request)
     {
-        // 1. Validamos que nos manden datos correctos
+        $isGuest = !Auth::check();
+
+        $rules = [
+            'seat_id'  => 'required|exists:event_seats,id',
+            'event_id' => 'required|exists:events,id',
+        ];
+
+        if ($isGuest) {
+            $rules['guest_name']  = 'required|string|max:255';
+            $rules['guest_email'] = 'required|email|max:255';
+            $rules['guest_phone'] = 'required|string|max:20';
+        }
+
+        $request->validate($rules);
+
+        $guestInfo = null;
+        if ($isGuest) {
+            $guestInfo = [
+                'name'  => $request->guest_name,
+                'email' => $request->guest_email,
+                'phone' => $request->guest_phone,
+            ];
+        }
+
+        try {
+            $this->reservationManager->reserveDirectly(
+                $request->seat_id,
+                $request->event_id,
+                $guestInfo
+            );
+        } catch (Exception $e) {
+            return back()->withErrors(['message' => $e->getMessage()]);
+        }
+
+        return redirect()->back();
+    }
+
+    public function apartar(Request $request)
+    {
         $request->validate([
-            'node_id' => 'required|exists:nodes,id',
+            'seat_id'  => 'required|exists:event_seats,id',
             'event_id' => 'required|exists:events,id',
         ]);
 
-        $node = Node::query()->findOrFail($request->node_id);
-        if ($node->status !== 'active') {
-            return back()->withErrors(['message' => 'Este asiento no está disponible para reserva.']);
+        $expiresAt = now()->addMinutes(10);
+
+        try {
+            $reservation = $this->reservationManager->holdSeat(
+                $request->seat_id,
+                $request->event_id,
+                $expiresAt
+            );
+        } catch (Exception $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        // 2. REGLA DE ORO: Verificamos si alguien más lo reservó en el último segundo
-        $yaExiste = Reservation::where('event_id', $request->event_id)
-            ->where('node_id', $request->node_id)
-            ->exists();
+        return response()->json([
+            'success'        => true,
+            'reservation_id' => $reservation->id,
+            'expires_at'     => $expiresAt->toIso8601String(),
+        ]);
+    }
 
-        if ($yaExiste) {
-            return back()->withErrors(['message' => '¡Lástima! Alguien acaba de ganar este asiento.']);
-        }
-
-        // 3. Guardamos la reserva en la Base de Datos
-        Reservation::create([
-            'event_id' => $request->event_id,
-            'node_id' => $request->node_id,
-            // Si el usuario no está logueado, le asignamos el ID 1 temporalmente para el MVP
-            'user_id' => Auth::id() ?? 1,
-            'status' => 'confirmed'
+    public function liberar(Request $request)
+    {
+        $request->validate([
+            'reservation_id' => 'required|exists:reservations,id',
         ]);
 
-        // 4. Recargamos la página (Inertia hará que el asiento se pinte de rojo automáticamente)
+        try {
+            $this->reservationManager->releaseReservation($request->reservation_id);
+        } catch (Exception $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json(['success' => true]);
+    }
+
+    public function confirmar(Request $request)
+    {
+        $request->validate([
+            'reservation_id' => 'required|exists:reservations,id',
+        ]);
+
+        $isGuest = !Auth::check();
+        $rules = [];
+        if ($isGuest) {
+            $rules['guest_name']  = 'required|string|max:255';
+            $rules['guest_email'] = 'required|email|max:255';
+            $rules['guest_phone'] = 'required|string|max:20';
+        }
+
+        $request->validate($rules);
+
+        $guestInfo = null;
+        if ($isGuest) {
+            $guestInfo = [
+                'name'  => $request->guest_name,
+                'email' => $request->guest_email,
+                'phone' => $request->guest_phone,
+            ];
+        }
+
+        try {
+            $this->reservationManager->confirmReservation($request->reservation_id, $guestInfo);
+        } catch (Exception $e) {
+            return back()->withErrors(['message' => $e->getMessage()]);
+        }
+
         return redirect()->back();
+    }
+
+    public function pagar(Request $request)
+    {
+        $isGuest = !Auth::check();
+
+        $rules = [
+            'reservation_id'    => 'required|exists:reservations,id',
+            'payment_method_id' => 'required|string|starts_with:pm_',
+        ];
+
+        if ($isGuest) {
+            $rules['guest_name']  = 'required|string|max:255';
+            $rules['guest_email'] = 'required|email|max:255';
+            $rules['guest_phone'] = 'required|string|max:20';
+        }
+
+        $request->validate($rules);
+
+        $reservation = Reservation::findOrFail($request->reservation_id);
+
+        if ($reservation->status !== 'pending') {
+            return response()->json([
+                'message' => 'Esta reservación ya fue confirmada o no existe.'
+            ], 422);
+        }
+
+        if ($reservation->expires_at && $reservation->expires_at->isPast()) {
+            return response()->json([
+                'message' => 'Tu tiempo de apartado ha expirado. Por favor selecciona el asiento de nuevo.'
+            ], 422);
+        }
+
+        $priceMxn       = config('tickets.ticket_price_mxn');
+        $amountCents    = $priceMxn * 100;
+        $amountDecimal  = (float) $priceMxn;
+
+        try {
+            $paymentIntent = $this->stripePaymentService->charge(
+                $amountCents,
+                $request->payment_method_id,
+                "Boleto: Asiento para el evento #{$reservation->event_id}"
+            );
+        } catch (Exception $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        if ($paymentIntent->status !== 'succeeded') {
+            return response()->json([
+                'message' => 'El pago no fue completado. Estado: ' . $paymentIntent->status
+            ], 422);
+        }
+
+        $guestInfo = null;
+        if ($isGuest) {
+            $guestInfo = [
+                'name'  => $request->guest_name,
+                'email' => $request->guest_email,
+                'phone' => $request->guest_phone,
+            ];
+        }
+
+        try {
+            $payment = $this->reservationManager->completePaymentAndConfirm(
+                $reservation,
+                $paymentIntent->id,
+                $amountDecimal,
+                $guestInfo
+            );
+        } catch (Exception $e) {
+            return response()->json(['message' => 'Error al registrar la confirmación del pago en la base de datos.'], 500);
+        }
+
+        return response()->json([
+            'success'      => true,
+            'payment_id'   => $payment->id,
+            'ticket_token' => $reservation->ticket_token,
+            'message'      => '¡Pago exitoso! Tu boleto ha sido confirmado.',
+        ]);
     }
 }
