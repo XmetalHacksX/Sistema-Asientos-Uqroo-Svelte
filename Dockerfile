@@ -77,4 +77,5 @@ command=php-fpm\n' > /etc/supervisord.conf
 EXPOSE 80
 
 # 11. Cachear configuraciones de Laravel para máxima velocidad y arrancar el servidor
-CMD php artisan config:cache && php artisan route:cache && php artisan view:cache && /usr/bin/supervisord -c /etc/supervisord.conf
+# 11. Limpia caché, optimiza, CORRE MIGRACIONES AUTOMÁTICAS y enciende Supervisor
+CMD php artisan config:cache && php artisan route:cache && php artisan view:cache && php artisan migrate --force && /usr/bin/supervisord -c /etc/supervisord.conf
