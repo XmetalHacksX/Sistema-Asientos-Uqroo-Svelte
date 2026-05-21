@@ -39,7 +39,8 @@ ENV NODE_ENV=production
 RUN composer install --no-interaction --optimize-autoloader --no-dev
 
 # 7. Instalar dependencias de Node, compilar el frontend (Svelte/Vite) corriendo Wayfinder con éxito
-RUN npm ci && npm run build
+# 7. Instalar TODAS las dependencias (incluyendo devDependencies de Vite) y compilar
+RUN npm install --include=dev && npm run build
 
 # 8. Ajustar permisos de almacenamiento y caché para que Laravel pueda escribir sin problemas
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache \
