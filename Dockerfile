@@ -37,7 +37,7 @@ ENV VITE_REVERB_SCHEME="https"
 ENV NODE_ENV=production
 
 # 6. Instalar dependencias de PHP y generar la optimización de clases
-RUN composer install --no-interaction --optimize-autoloader --no-dev
+RUN composer install --no-interaction --optimize-autoloader
 
 # 7. Instalar TODAS las dependencias de Node (incluyendo devDependencies de Vite) y compilar el frontend
 RUN npm install --include=dev && npm run build
